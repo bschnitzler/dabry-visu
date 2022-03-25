@@ -1,12 +1,24 @@
+import colorsys
+import json
+import os
+import webbrowser
+
 import matplotlib.cm as mpl_cm
 import matplotlib.colors as mpl_colors
 import matplotlib.pyplot as plt
+from IPython.lib.display import IFrame
 from matplotlib.gridspec import GridSpec
 from mpl_toolkits.basemap import Basemap
 import h5py
+import scipy.ndimage
+from math import floor
+from geopy import Nominatim
+import datetime
+import markdown
+from IPython.core.display import display, HTML
 
-from font_config import FontsizeConf
-from misc import *
+from mdisplay.font_config import FontsizeConf
+from mdisplay.misc import *
 
 state_names = [r"$x\:[m]$", r"$y\:[m]$"]
 control_names = [r"$u\:[rad]$"]
@@ -17,7 +29,7 @@ class Display:
     Defines all the visualization functions for navigation problems
     """
 
-    def __init__(self, coords='cartesian', mode='only-map'):
+    def __init__(self, coords='cartesian', mode='only-map', title='Title', projection='merc'):
         """
         :param coords: Either 'cartesian' for planar problems or 'gcs' for Earth-based problems
         """
@@ -42,8 +54,14 @@ class Display:
         self.map_adjoint = None
         self.display_setup = False
         self.cm = None
-        self.title = 'test'
+        self.title = title
         self.axes_equal = True
+        self.projection = projection
+
+        self.cm_norm_min = None
+        self.cm_norm_max = None
+
+        self.output_path = None
 
     def setup(self, x_min=-.1, x_max=1.5, y_min=-1., y_max=1.):
         self.x_min = x_min
@@ -105,18 +123,63 @@ class Display:
         self.display_setup = True
 
     def setup_cm(self):
-        # top = np.array(colorsys.hls_to_rgb(141 / 360, .6, .81) + (1.,))
-        # middle = np.array(colorsys.hls_to_rgb(41 / 360, .6, .88) + (1.,))
-        # bottom = np.array(colorsys.hls_to_rgb(358 / 360, .6, .82) + (1.,))
-        #
-        # S = np.linspace(0., 1., 128)
-        #
-        # first = np.array([(1 - s) * top + s * middle for s in S])
-        # second = np.array([(1 - s) * middle + s * bottom for s in S])
-        #
-        # newcolors = np.vstack((first, second))
-        # newcolors[-1] = np.array([0.4, 0., 1., 1.])
-        self.cm = mpl_colors.Colormap('viridis')
+        # Windy default cm
+        cm_values = [[0, [98, 113, 183, 255]],
+                     [1, [57, 97, 159, 255]],
+                     [3, [74, 148, 169, 255]],
+                     [5, [77, 141, 123, 255]],
+                     [7, [83, 165, 83, 255]],
+                     [9, [53, 159, 53, 255]],
+                     [11, [167, 157, 81, 255]],
+                     [13, [159, 127, 58, 255]],
+                     [15, [161, 108, 92, 255]],
+                     [17, [129, 58, 78, 255]],
+                     [19, [175, 80, 136, 255]],
+                     [21, [117, 74, 147, 255]],
+                     [24, [109, 97, 163, 255]],
+                     [27, [68, 105, 141, 255]],
+                     [29, [92, 144, 152, 255]],
+                     [36, [125, 68, 165, 255]],
+                     [46, [231, 215, 215, 256]],
+                     [51, [219, 212, 135, 256]],
+                     [77, [205, 202, 112, 256]],
+                     [104, [128, 128, 128, 255]]]
+        # Truncated Windy cm
+        cm_values = [[0, [98, 113, 183, 255]],
+                     [1, [57, 97, 159, 255]],
+                     [3, [74, 148, 169, 255]],
+                     [5, [77, 141, 123, 255]],
+                     [7, [83, 165, 83, 255]],
+                     [9, [53, 159, 53, 255]],
+                     [11, [167, 157, 81, 255]],
+                     [13, [159, 127, 58, 255]],
+                     [15, [161, 108, 92, 255]],
+                     [17, [129, 58, 78, 255]],
+                     [19, [175, 80, 136, 255]],
+                     [21, [117, 74, 147, 255]],
+                     [24, [109, 97, 163, 255]],
+                     [27, [68, 105, 141, 255]],
+                     [29, [92, 144, 152, 255]],
+                     [36, [125, 68, 165, 255]]]
+        self.cm_norm_min = 0.
+        self.cm_norm_max = 36.
+
+        def lighten(c):
+            hls = colorsys.rgb_to_hls(*(np.array(c[:3]) / 256.))
+            hls = (hls[0], 0.5 + 0.5 * hls[1], 0.6 + 0.4 * hls[2])
+            res = list(colorsys.hls_to_rgb(*hls)) + [c[3] / 256.]
+            return res
+
+        newcolors = np.array(lighten(cm_values[0][1]))
+        for ii in range(len(cm_values) - 1):
+            j_min = 10 * cm_values[ii - 1][0]
+            j_max = 10 * cm_values[ii][0]
+            for j in range(j_min, j_max):
+                c1 = np.array(lighten(cm_values[ii - 1][1]))
+                c2 = np.array(lighten(cm_values[ii][1]))
+                t = (j - j_min) / (j_max - j_min)
+                newcolors = np.vstack((newcolors, (1 - t) * c1 + t * c2))
+        self.cm = mpl_colors.ListedColormap(newcolors, name='Windy')
 
     def setup_map(self):
         """
@@ -134,15 +197,21 @@ class Display:
                                llcrnrlat=self.y_min - self.y_offset * (self.y_max - self.y_min),
                                urcrnrlon=self.x_max + self.x_offset * (self.x_max - self.x_min),
                                urcrnrlat=self.y_max + self.y_offset * (self.y_max - self.y_min),
-                               rsphere=(6378137.00, 6356752.3142),
-                               resolution='l', projection='merc')
+                               # rsphere=(6378137.00, 6356752.3142),
+                               resolution='l', projection=self.projection)
             # self.map.shadedrelief()
             self.map.drawcoastlines()
             self.map.fillcontinents()
             # draw parallels
-            self.map.drawparallels(np.arange(-80, 80, 17), labels=[1, 0, 0, 0])
+            lat_min = min(self.y_min, self.y_max)
+            lat_max = max(self.y_min, self.y_max)
+            n_lat = floor((lat_max - lat_min) / 10) + 2
+            self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0])
             # draw meridians
-            self.map.drawmeridians(np.arange(-170, 180, 35), labels=[1, 1, 0, 1])
+            lon_min = min(self.x_min, self.x_max)
+            lon_max = max(self.x_min, self.x_max)
+            n_lon = floor((lon_max - lon_min) / 10) + 2
+            self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 1, 0, 1])
 
         if CARTESIAN:
             self.map.set_xlim(self.x_min, self.x_max)
@@ -169,30 +238,30 @@ class Display:
         if self.axes_equal:
             self.map_adjoint.axis('equal')
 
-    def set_title(self, title):
-        self.title = title
-        self.mainfig.suptitle(self.title)
+    def draw_point_by_name(self, name):
+        geoloc = Nominatim(user_agent='openstreetmaps')
+        loc = geoloc.geocode(name)
+        self.map.scatter(loc.longitude, loc.latitude, s=8., color='red', marker='D', latlon=True, zorder=ZO_ANNOT)
+        plt.annotate(name, self.map(loc.longitude, loc.latitude), (10, 10), textcoords='offset pixels', ha='center')
 
-    def set_wind_density(self, level: int):
-        """
-        Sets the wind vector density in the plane.
-        :param level: The density level
-        """
-        self.nx_wind *= level
-        self.ny_wind *= level
+    def draw_wind(self, filename, adjust_map=False):
 
-    def draw_wind(self, filepath):
-        with h5py.File(filepath, 'r') as f:
+        # Wind is piecewise constant
+        wind_nointerp = True
+
+        with h5py.File(os.path.join(self.output_path, filename), 'r') as f:
             nt, nx, ny, _ = f['data'].shape
             X = np.zeros((nx, ny))
             Y = np.zeros((nx, ny))
             X[:] = f['grid'][:, :, 0]
             Y[:] = f['grid'][:, :, 1]
-            self.x_min = np.min(X)
-            self.x_max = np.max(X)
-            self.y_min = np.min(Y)
-            self.y_max = np.max(Y)
-            self.setup_map()
+            if adjust_map:
+                self.x_min = np.min(X)
+                self.x_max = np.max(X)
+                self.y_min = np.min(Y)
+                self.y_max = np.max(Y)
+                self.setup_map()
+            alpha_bg = 1.0
 
             # Resize window
 
@@ -205,29 +274,67 @@ class Display:
             U = f['data'][0, :, :, 0].flatten()
             V = f['data'][0, :, :, 1].flatten()
 
+            norms3d = np.sqrt(f['data'][0, :, :, 0] ** 2 + f['data'][0, :, :, 1] ** 2)
             norms = np.sqrt(U ** 2 + V ** 2)
             lognorms = np.log(np.sqrt(U ** 2 + V ** 2))
 
             norm = mpl_colors.Normalize()
-            norm.autoscale(np.array([0., 2.]))
+            norm.autoscale(np.array([self.cm_norm_min, self.cm_norm_max]))
 
             sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
 
-            # sm.set_array(np.array([]))
+            cb = self.map.colorbar(sm)  # , orientation='vertical')
+            cb.set_label('Wind [m/s]')
 
-            def color_value(x):
-                res = sm.to_rgba(x)
-                if x > 1.:
-                    return res
-                else:
-                    newres = res[0], res[1], res[2], 0.3
-                    return newres
-
-            # color = list(map(lambda x: color_value(x), norms))
-            kwargs = {'headwidth':2, 'width':0.004}
+            # Wind norm plot
+            # znorms3d = scipy.ndimage.zoom(norms3d, 3)
+            # zX = scipy.ndimage.zoom(X, 3)
+            # zY = scipy.ndimage.zoom(Y, 3)
+            znorms3d = norms3d
+            zX = X
+            zY = Y
+            kwargs = {
+                'cmap': self.cm,
+                'norm': norm,
+                'alpha': alpha_bg,
+                'zorder': ZO_WIND_NORM
+            }
             if self.coords == 'gcs':
                 kwargs['latlon'] = True
-            self.map.quiver(X, Y, U / norms, V / norms, **kwargs)# color=color)
+
+            if wind_nointerp:
+                self.map.pcolormesh(zX, zY, znorms3d, **kwargs)
+            else:
+                znorms3d = scipy.ndimage.zoom(norms3d, 3)
+                zX = scipy.ndimage.zoom(X, 3)
+                zY = scipy.ndimage.zoom(Y, 3)
+                kwargs['antialiased'] = True
+                kwargs['levels'] = 50
+                self.map.contourf(zX, zY, znorms3d, **kwargs)
+
+            # Quiver plot
+            kwargs = {
+                'width': 0.001,
+                'pivot': 'mid',
+                'alpha': 0.7,
+                'zorder': ZO_WIND_VECTORS
+            }
+            if self.coords == 'gcs':
+                kwargs['latlon'] = True
+            self.map.quiver(X, Y, U / norms, V / norms, **kwargs)  # color=color)
+
+            # Stream plot
+            kwargs = {'linewidth': 0.3, 'color': (0., 0., 0., alpha_bg)}
+            if self.coords == 'cartesian':
+                args = X[:, 0], Y[0, :], (f['data'][0, :, :, 0] / norms3d).transpose(), \
+                       (f['data'][0, :, :, 1] / norms3d).transpose()
+            elif self.coords == 'gcs':
+                args = X.transpose(), Y.transpose(), (f['data'][0, :, :, 0] / norms3d).transpose(), \
+                       (f['data'][0, :, :, 1] / norms3d).transpose()
+                # args = X.transpose(), Y.transpose(), (f['data'][0, :, :, 0] / norms3d).transpose(), \
+                #        (f['data'][0, :, :, 1] / norms3d).transpose()
+                kwargs['latlon'] = True
+            # self.map.streamplot(*args, **kwargs)  # color=color)
 
             # divider = make_axes_locatable(self.map)
             # cax = divider.append_axes("right", size="5%", pad=0.05)
@@ -257,69 +364,57 @@ class Display:
             if k == len(self.control) - 1:
                 control_plot.set_xlabel(r"$t\:[s]$")
 
-    def plot_traj(self, points, controls, ts, type, last_index, interrupted, color_mode="default", **kwargs):
+    def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, color_mode="default", nt_tick=10,
+                  max_time=None, **kwargs):
         """
         Plots the given trajectory according to selected display mode
+        :param nt_tick: Total number of ticking points to display (including start and end)
         """
-        t_tick = (ts[-1] - ts[0]) / 5.
+        if max_time is not None:
+            duration = max_time
+        else:
+            duration = (ts[-1] - ts[0])
+        t_tick = duration / (nt_tick - 1)
         if not self.display_setup:
             self.setup()
-        label = None
-        s = 0.5 * np.ones(last_index)
-        if color_mode == "default":
-            colors = None
-            cmap = None
-        elif color_mode == "monocolor":
-            colors = np.tile(monocolor_colors[type], last_index).reshape((last_index, 4))
-            cmap = None
-        elif color_mode == "reachability":
-            colors = np.ones((last_index, 4))
-            colors[:] = np.einsum("ij,j->ij", colors, reachability_colors[type]["steps"])
 
-            t_count = 0.
-            for k, t in enumerate(ts):
-                if t - t_count > t_tick:
-                    t_count = t
-                    try:
-                        colors[k] = reachability_colors[type]["time-tick"]
-                        s[k] = 1.5
-                    except IndexError:
-                        pass
-            colors[-1, :] = reachability_colors[type]["last"]  # Last point
-            s[-1] = 2.
-            cmap = plt.get_cmap("YlGn")
-        elif color_mode == "reachability-enhanced":
-            if "scalar_prods" not in kwargs:
-                raise ValueError('Expected "scalar_prods" argument for "reachability-enhanced" plot mode')
-            _cmap = plt.get_cmap('winter')
-            colors = np.ones((last_index, 4))
-            t_count = 0.
-            for k, t in enumerate(ts):
-                if t - t_count > 0.5:
-                    t_count = t
-                    colors[k] = reachability_colors[type]["time-tick"]
-                    s[k] = 2.
-            for k in range(last_index):
-                colors[k:] = _cmap(kwargs['scalar_prods'][k])
-            colors[-1, :] = reachability_colors[type]["last"]  # Last point
-            s *= 1.5
-            s[-1] = 2.
-            cmap = plt.get_cmap("YlGn")
-        else:
-            raise ValueError(f"Unknown plot mode {color_mode}")
-        s *= 3.
+        # Lines
+        kwargs = {'color': reachability_colors[type]['steps'],
+                  'zorder': ZO_TRAJS}
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+        self.map.plot(points[:last_index - 1, 0], points[:last_index - 1, 1], **kwargs)
 
-        self.map.scatter(points[:last_index - 1, 0], points[:last_index - 1, 1],
-                         s=s[:-1],
-                         c=colors[:-1],
-                         cmap=cmap,
-                         label=label,
-                         marker=None, latlon=True)
-        self.map.scatter(points[last_index - 1, 0], points[last_index - 1, 1],
-                         s=10. if interrupted else s[-1],
-                         c=[colors[-1]],
-                         marker=(r'x' if interrupted else 'o'),
-                         linewidths=1., latlon=True)
+        # Ticks
+        ticking_points = np.zeros((nt_tick, 2))
+        nt = ts.shape[0]
+        delta_t = duration / (nt - 1)
+        k = 0
+        for j, t in enumerate(ts):
+            if j >= last_index:
+                break
+            if abs(t - k * t_tick) < 1.05 * (delta_t / 2.):
+                ticking_points[k, :] = points[j]
+                k += 1
+        kwargs = {'s': 10. if interrupted else 5.,
+                  'c': [reachability_colors[type]["time-tick"]],
+                  'marker': 'o',
+                  'linewidths': 1.,
+                  'zorder': ZO_TRAJS}
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+        self.map.scatter(ticking_points[1:k - 1, 0], ticking_points[1:k - 1, 1], **kwargs)
+
+        # Last points
+        kwargs = {'s': 10. if interrupted else 5.,
+                  'c': [reachability_colors[type]["last"]],
+                  'marker': (r'x' if interrupted else 'o'),
+                  'linewidths': 1.,
+                  'zorder': ZO_TRAJS}
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+        self.map.scatter(points[last_index - 1, 0], points[last_index - 1, 1], **kwargs)
+
         # if controls:
         #     dt = np.mean(ts[1:] - ts[:-1])
         #     for k, point in enumerate(points):
@@ -340,33 +435,80 @@ class Display:
         #                                  label=label,
         #                                  marker=None)
 
-    def draw_trajs(self, filepath):
-        with h5py.File(filepath, 'r') as f:
+    def draw_trajs(self, filename, nt_tick=None, max_time=None):
+        with h5py.File(os.path.join(self.output_path, filename), 'r') as f:
             for traj in f.values():
+                if traj.attrs['coords'] != self.coords:
+                    print(f'Warning : traj coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
+                kwargs = {
+                    'color_mode': 'reachability',
+                }
+                if nt_tick is not None:
+                    kwargs['nt_tick'] = nt_tick
+                if max_time is not None:
+                    kwargs['max_time'] = max_time
                 self.plot_traj(traj['data'],
                                traj['controls'],
                                traj['ts'],
                                traj.attrs['type'],
                                traj.attrs['last_index'],
-                               traj.attrs['interrupted'], color_mode='reachability')
+                               traj.attrs['interrupted'],
+                               traj.attrs['coords'],
+                               **kwargs)
 
-    def draw_rff(self, filepath):
-        with h5py.File(filepath, 'r') as f:
-            self.map.contourf(f['grid'][:, :, 0], f['grid'][:, :, 1], f['data'][5, :, :], [-1e-3, 1e-3])
+    def draw_rff(self, filename, timeindex=None, debug=False):
+        kwargs = {
+            'zorder': ZO_RFF,
+            'cmap': 'brg',
+            'antialiased': True
+        }
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+        with h5py.File(os.path.join(self.output_path, filename), 'r') as f:
+            nt, nx, ny = f['data'].shape
+            ts_list = [timeindex] if timeindex is not None else range(nt)
+            for k in ts_list:
+                args = (f['grid'][:, :, 0], f['grid'][:, :, 1], f['data'][k, :, :]) + (
+                    ([-1000., 1000.],) if not debug else ())
+                self.map.contourf(*args, **kwargs)
 
-if __name__ == '__main__':
-    """
-    d = Display(coords='gcs')
-    d.setup(x_min=-76., x_max=5., y_min=35., y_max=52.)
-    # d.draw_wind('/home/bastien/Documents/data/wind/mermoz/Vancouver-Honolulu-1.0/data.h5')
-    d.draw_trajs('/home/bastien/Documents/work/mermoz/output/trajs/trajectories.h5')
-    d.map.drawgreatcircle(-75., 40., 2., 48., linewidth=1, color='b', alpha=0.4,
-                           linestyle='--',
-                           label='Great circle')
-    """
-    d = Display(coords='cartesian')
-    d.setup()
-    #d.draw_rff('/home/bastien/Documents/work/mermoz/output/rff/rff.h5')
-    d.draw_wind('/home/bastien/Documents/data/wind/mermoz/Dakar-Natal-0.5-tweaked/data.h5')
-    d.draw_rff('/home/bastien/Documents/data/rff/test.h5')
-    plt.show()
+    def show_params(self, filename):
+        with open(os.path.join(self.output_path, filename), 'r') as f:
+            params = json.load(f)
+
+        if params['coords'] == 'gcs':
+            units = '°'
+            x_name = 'lon'
+            y_name = 'lat'
+        else:
+            units = 'm'
+            x_name = 'X'
+            y_name = 'Y'
+        s = ""
+        s += '### Computation parameters\n\n'
+
+        table = \
+            "| Parameter         | Value | Units |\n|---|:---:|---|\n" + \
+            f"| Type of coordinates  | {params['coords']} |   |\n" + \
+            f"| Wind bottom left bound | {params['bl_wind'][0]}, {params['bl_wind'][1]} | {units} |\n" + \
+            f"| Wind grid ({x_name}x{y_name}) | {params['nx_wind']}x{params['ny_wind']} |  |\n" + \
+            f"| Wind date | {datetime.datetime.fromtimestamp(params['date_wind'] / 1000.)} |  |\n" + \
+            f"| Time window upper bound | {params['max_time']} | s |\n" + \
+            f"| PMP number of time steps | {params['nt_pmp']} |  |\n" + \
+            f"| RFT number of time steps | {params['nt_pmp']} |  |\n" + \
+            f"| RFT grid ({x_name}x{y_name}) | {params['nx_rft']}x{params['ny_rft']} |  |\n" + \
+            f"| Computation time PMP | {params['pmp_time']:.3f} | s |\n" + \
+            f"| Computation time RFT | {params['rft_time']:.3f} | s |\n"
+
+        # f"| Wind top right bound | {params['tr_wind']} | {units} |\n" + \
+        # f"| Start point | {params['point_init']} | {units} |\n" + \
+        s += table
+        s += '<link href="style.css" rel="stylesheet"/>'
+        md = markdown.markdown(s, extensions=['tables'])
+        path = os.path.join(self.output_path, 'params.html')
+        with open(path, "w", encoding="utf-8", errors="xmlcharrefreplace") as output_file:
+            output_file.write(md)
+        webbrowser.open(path)
+
+    def set_output_path(self, path):
+        self.output_path = path

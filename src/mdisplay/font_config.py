@@ -1,3 +1,5 @@
+from matplotlib import font_manager
+
 class FontsizeConf:
 
     def __init__(self):
@@ -7,7 +9,7 @@ class FontsizeConf:
         self.xtick_labelsize = 10
         self.ytick_labelsize = 10
         self.legend_fontsize = 14
-        self.font_family = 'lato'
+        self.font_family = 'ibm plex sans' # 'lato'
         self.mathtext_fontset = 'cm'
 
     # def __init__(self):
