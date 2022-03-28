@@ -1,6 +1,7 @@
 import colorsys
 import json
 import os
+import shutil
 import webbrowser
 
 import matplotlib.cm as mpl_cm
@@ -18,7 +19,9 @@ import markdown
 from IPython.core.display import display, HTML
 
 from mdisplay.font_config import FontsizeConf
+from mdisplay.geodata import GeoData
 from mdisplay.misc import *
+from mdisplay.params_summary import ParamsSummary
 
 state_names = [r"$x\:[m]$", r"$y\:[m]$"]
 control_names = [r"$u\:[rad]$"]
@@ -62,8 +65,40 @@ class Display:
         self.cm_norm_max = None
 
         self.output_path = None
+        self.params_fname = 'params.json'
+        self.params_ss_path = '/home/bastien/Documents/work/mdisplay/data'
+        self.params_ss_fname = 'params.css'
 
-    def setup(self, x_min=-.1, x_max=1.5, y_min=-1., y_max=1.):
+        self.geodata = GeoData()
+
+    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None):
+
+        if bl is None:
+            with open(os.path.join(self.output_path, self.params_fname), 'r') as f:
+                params = json.load(f)
+            x_min = params['bl_wind'][0]
+            x_max = params['tr_wind'][0]
+            y_min = params['bl_wind'][1]
+            y_max = params['tr_wind'][1]
+        else:
+            if type(bl) == str:
+                x_min, y_min = self.geodata.get_coords(bl)
+            else:
+                x_min = bl[0]
+                y_min = bl[1]
+
+            if type(tr) == str:
+                x_max, y_max = self.geodata.get_coords(tr)
+            else:
+                x_max = tr[0]
+                y_max = tr[1]
+
+        if bl_off is not None:
+            self.x_offset = bl_off
+
+        if tr_off is not None:
+            self.y_offset = tr_off
+
         self.x_min = x_min
         self.x_max = x_max
         self.y_min = y_min
@@ -239,10 +274,9 @@ class Display:
             self.map_adjoint.axis('equal')
 
     def draw_point_by_name(self, name):
-        geoloc = Nominatim(user_agent='openstreetmaps')
-        loc = geoloc.geocode(name)
-        self.map.scatter(loc.longitude, loc.latitude, s=8., color='red', marker='D', latlon=True, zorder=ZO_ANNOT)
-        plt.annotate(name, self.map(loc.longitude, loc.latitude), (10, 10), textcoords='offset pixels', ha='center')
+        loc = self.geodata.get_coords(name)
+        self.map.scatter(loc[0], loc[1], s=8., color='red', marker='D', latlon=True, zorder=ZO_ANNOT)
+        plt.annotate(name, self.map(loc[0], loc[1]), (10, 10), textcoords='offset pixels', ha='center')
 
     def draw_wind(self, filename, adjust_map=False):
 
@@ -297,7 +331,8 @@ class Display:
                 'cmap': self.cm,
                 'norm': norm,
                 'alpha': alpha_bg,
-                'zorder': ZO_WIND_NORM
+                'zorder': ZO_WIND_NORM,
+                'shading': 'auto',
             }
             if self.coords == 'gcs':
                 kwargs['latlon'] = True
@@ -314,6 +349,7 @@ class Display:
 
             # Quiver plot
             kwargs = {
+                'color': (0.4, 0.4, 0.4, 1.0),
                 'width': 0.001,
                 'pivot': 'mid',
                 'alpha': 0.7,
@@ -403,7 +439,7 @@ class Display:
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
-        self.map.scatter(ticking_points[1:k - 1, 0], ticking_points[1:k - 1, 1], **kwargs)
+        self.map.scatter(ticking_points[1:k, 0], ticking_points[1:k, 1], **kwargs)
 
         # Last points
         kwargs = {'s': 10. if interrupted else 5.,
@@ -472,42 +508,18 @@ class Display:
                     ([-1000., 1000.],) if not debug else ())
                 self.map.contourf(*args, **kwargs)
 
-    def show_params(self, filename):
-        with open(os.path.join(self.output_path, filename), 'r') as f:
+    def show_params(self, fname=None):
+        fname = self.params_fname if fname is None else fname
+        with open(os.path.join(self.output_path, fname), 'r') as f:
             params = json.load(f)
 
-        if params['coords'] == 'gcs':
-            units = '°'
-            x_name = 'lon'
-            y_name = 'lat'
-        else:
-            units = 'm'
-            x_name = 'X'
-            y_name = 'Y'
-        s = ""
-        s += '### Computation parameters\n\n'
-
-        table = \
-            "| Parameter         | Value | Units |\n|---|:---:|---|\n" + \
-            f"| Type of coordinates  | {params['coords']} |   |\n" + \
-            f"| Wind bottom left bound | {params['bl_wind'][0]}, {params['bl_wind'][1]} | {units} |\n" + \
-            f"| Wind grid ({x_name}x{y_name}) | {params['nx_wind']}x{params['ny_wind']} |  |\n" + \
-            f"| Wind date | {datetime.datetime.fromtimestamp(params['date_wind'] / 1000.)} |  |\n" + \
-            f"| Time window upper bound | {params['max_time']} | s |\n" + \
-            f"| PMP number of time steps | {params['nt_pmp']} |  |\n" + \
-            f"| RFT number of time steps | {params['nt_pmp']} |  |\n" + \
-            f"| RFT grid ({x_name}x{y_name}) | {params['nx_rft']}x{params['ny_rft']} |  |\n" + \
-            f"| Computation time PMP | {params['pmp_time']:.3f} | s |\n" + \
-            f"| Computation time RFT | {params['rft_time']:.3f} | s |\n"
-
-        # f"| Wind top right bound | {params['tr_wind']} | {units} |\n" + \
-        # f"| Start point | {params['point_init']} | {units} |\n" + \
-        s += table
-        s += '<link href="style.css" rel="stylesheet"/>'
-        md = markdown.markdown(s, extensions=['tables'])
+        ps = ParamsSummary(style=self.params_ss_fname)
+        md = ps.process_params(params)
         path = os.path.join(self.output_path, 'params.html')
         with open(path, "w", encoding="utf-8", errors="xmlcharrefreplace") as output_file:
             output_file.write(md)
+        shutil.copyfile(os.path.join(self.params_ss_path, self.params_ss_fname),
+                        os.path.join(self.output_path, self.params_ss_fname))
         webbrowser.open(path)
 
     def set_output_path(self, path):
