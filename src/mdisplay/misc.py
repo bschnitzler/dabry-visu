@@ -13,6 +13,7 @@ my_orange2 = np.array([105/255, 63/255, 0., 1.0])
 my_orange_t = np.diag((1., 1., 1., 0.5)).dot(my_orange)
 my_blue = np.array([0., 0., 0.8, 1.])
 my_blue_t = np.diag((1., 1., 1., 0.5)).dot(my_blue)
+my_dark_blue = np.array([28/255, 25/255, 117/255, 1.])
 my_black = np.array([0., 0., 0., 1.])
 my_grey1 = np.array([0.75, 0.75, 0.75, 0.6])
 my_grey2 = np.array([0.7, 0.7, 0.7, 1.0])
@@ -30,8 +31,8 @@ reachability_colors = {
         # "last": my_red
     },
     'integral': {
-        "steps": my_grey1,
-        "time-tick": my_orange,
+        "steps": my_dark_blue,
+        "time-tick": my_orange2,
         "last": my_blue
     },
     "approx": {
@@ -50,6 +51,10 @@ reachability_colors = {
         "last": my_green
     },
 }
+
+markers = ['o', "1", "2", "3", "4"]
+
+linestyle = ['solid', 'dotted', 'dashed', 'dashdot', (0, (1, 10)), (0, (5, 10)), (0, (3, 5, 1, 5))]
 
 monocolor_colors = {
     'pmp': my_red_t,

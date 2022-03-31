@@ -2,11 +2,14 @@ import colorsys
 import json
 import os
 import shutil
+import sys
 import webbrowser
 
 import matplotlib.cm as mpl_cm
 import matplotlib.colors as mpl_colors
 import matplotlib.pyplot as plt
+
+from matplotlib.widgets import Button
 from IPython.lib.display import IFrame
 from matplotlib.gridspec import GridSpec
 from mpl_toolkits.basemap import Basemap
@@ -17,11 +20,11 @@ from geopy import Nominatim
 import datetime
 import markdown
 from IPython.core.display import display, HTML
+import time
 
 from mdisplay.font_config import FontsizeConf
 from mdisplay.geodata import GeoData
 from mdisplay.misc import *
-from mdisplay.params_summary import ParamsSummary
 
 state_names = [r"$x\:[m]$", r"$y\:[m]$"]
 control_names = [r"$u\:[rad]$"]
@@ -49,6 +52,11 @@ class Display:
 
         # Main figure
         self.mainfig = None
+        self.mainax = None
+
+        # The object that handles plot, scatter, contourf... whatever cartesian or gcs
+        self.ax = None
+
         # Single plots figure
         self.spfig = None
         # Adjoint figure
@@ -64,17 +72,37 @@ class Display:
         self.cm_norm_min = None
         self.cm_norm_max = None
 
-        self.output_path = None
+        # Time window upper bound for trajectories
+        self.max_time = None
+        # Number of expected time major ticks on trajectories
+        self.nt_tick = None
+
+        self.output_dir = None
         self.params_fname = 'params.json'
-        self.params_ss_path = '/home/bastien/Documents/work/mdisplay/data'
-        self.params_ss_fname = 'params.css'
+        self.params_fname_formatted = 'params.html'
+
+        self.wind_fname = 'wind.h5'
+        self.trajs_fname = 'trajectories.h5'
+        self.rff_fname = 'rff.h5'
+
+        self.traj_artists = []
+        self.traj_lines = []
+        self.traj_ticks = []
+        self.traj_lp = []
+
+        self.rff_contours = []
+
+        self.label_list = []
 
         self.geodata = GeoData()
 
     def setup(self, bl=None, tr=None, bl_off=None, tr_off=None):
 
         if bl is None:
-            with open(os.path.join(self.output_path, self.params_fname), 'r') as f:
+            if self.output_dir is None:
+                print('Output path not set')
+                exit(1)
+            with open(os.path.join(self.output_dir, self.params_fname), 'r') as f:
                 params = json.load(f)
             x_min = params['bl_wind'][0]
             x_max = params['tr_wind'][0]
@@ -117,7 +145,7 @@ class Display:
         self.mainfig = plt.figure(num="Navigation problem", constrained_layout=False)
         self.mainfig.subplots_adjust(
             top=0.93,
-            bottom=0.08,
+            bottom=0.15,
             left=0.075,
             right=0.93,
             hspace=0.155,
@@ -125,13 +153,15 @@ class Display:
         )
         self.mainfig.suptitle(self.title)
 
+        self.mainax = self.mainfig.add_subplot()
+
         if self.mode == "only-map":
-            gs = GridSpec(1, 1, figure=self.mainfig)
-            self.map = self.mainfig.add_subplot(gs[0, 0])
+            # gs = GridSpec(1, 1, figure=self.mainfig)
+            # self.map = self.mainfig.add_subplot(gs[0, 0])
+            pass
         elif self.mode == "full":
             """
-            In this mode, let the map on the left hand side of the plot and plot the components of the state
-            and the control on the right hand side
+            In this mode, display a second figure with state and control evolution over time
             """
             print(f'Mode "{self.mode}" unsupported yet')
             exit(1)
@@ -143,7 +173,7 @@ class Display:
             #     self.control.append(self.mainfig.add_subplot(gs[k + self.dim_state, 1]))
         elif self.mode == "full-adjoint":
             """
-            In this mode, plot the state as well as the adjoint state vector
+            In this mode, display a third figure with adjoint state evolution over time
             """
             print(f'Mode "{self.mode}" unsupported yet')
             exit(1)
@@ -156,6 +186,13 @@ class Display:
             self.setup_map_adj()
         # self.setup_components()
         self.display_setup = True
+
+        self.ax_button = self.mainfig.add_axes([0.44, 0.025, 0.08, 0.05])
+        # properties of the button
+        self.grid_button = Button(self.ax_button, 'Reload', color='white', hovercolor='grey')
+
+        # triggering event is the clicking
+        self.grid_button.on_clicked(self.reload)
 
     def setup_cm(self):
         # Windy default cm
@@ -223,9 +260,9 @@ class Display:
         CARTESIAN = (self.coords == 'cartesian')
         GCS = (self.coords == 'gcs')
         if CARTESIAN:
-            self.map.axhline(y=0, color='k', linewidth=0.5)
-            self.map.axvline(x=0, color='k', linewidth=0.5)
-            self.map.axvline(x=1., color='k', linewidth=0.5)
+            self.mainax.axhline(y=0, color='k', linewidth=0.5)
+            self.mainax.axvline(x=0, color='k', linewidth=0.5)
+            self.mainax.axvline(x=1., color='k', linewidth=0.5)
 
         if GCS:
             self.map = Basemap(llcrnrlon=self.x_min - self.x_offset * (self.x_max - self.x_min),
@@ -233,7 +270,8 @@ class Display:
                                urcrnrlon=self.x_max + self.x_offset * (self.x_max - self.x_min),
                                urcrnrlat=self.y_max + self.y_offset * (self.y_max - self.y_min),
                                # rsphere=(6378137.00, 6356752.3142),
-                               resolution='l', projection=self.projection)
+                               resolution='l', projection=self.projection,
+                               ax=self.mainax)
             # self.map.shadedrelief()
             self.map.drawcoastlines()
             self.map.fillcontinents()
@@ -249,14 +287,19 @@ class Display:
             self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 1, 0, 1])
 
         if CARTESIAN:
-            self.map.set_xlim(self.x_min, self.x_max)
-            self.map.set_ylim(self.y_min, self.y_max)
-            self.map.set_xlabel('$x$')
-            self.map.set_ylabel('$y$')
-            self.map.grid(visible=True, linestyle='-.', linewidth=0.5)
+            self.mainax.set_xlim(self.x_min, self.x_max)
+            self.mainax.set_ylim(self.y_min, self.y_max)
+            self.mainax.set_xlabel('$x$ [m]')
+            self.mainax.set_ylabel('$y$ [m]')
+            self.mainax.grid(visible=True, linestyle='-.', linewidth=0.5)
             if self.axes_equal:
-                self.map.axis('equal')
-            self.map.tick_params(direction='in')
+                self.mainax.axis('equal')
+            self.mainax.tick_params(direction='in')
+
+        if CARTESIAN:
+            self.ax = self.mainax
+        if GCS:
+            self.ax = self.map
 
     def setup_map_adj(self):
         """
@@ -274,16 +317,42 @@ class Display:
             self.map_adjoint.axis('equal')
 
     def draw_point_by_name(self, name):
+        if self.coords != 'gcs':
+            print('"draw_point_by_name" only available for GCS coordinates')
+            exit(1)
         loc = self.geodata.get_coords(name)
         self.map.scatter(loc[0], loc[1], s=8., color='red', marker='D', latlon=True, zorder=ZO_ANNOT)
-        plt.annotate(name, self.map(loc[0], loc[1]), (10, 10), textcoords='offset pixels', ha='center')
+        self.mainax.annotate(name, self.map(loc[0], loc[1]), (10, 10), textcoords='offset pixels', ha='center')
 
-    def draw_wind(self, filename, adjust_map=False):
+    def draw_point(self, x, y, label=None):
+        kwargs = {
+            's': 8.,
+            'color': 'red',
+            'marker': 'D',
+            'zorder': ZO_ANNOT
+        }
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+            pos_annot = self.map(x, y)
+        else:
+            pos_annot = (x, y)
+        self.ax.scatter(x, y, **kwargs)
+        if label is not None:
+            self.ax.annotate(label, pos_annot, (10, 10), textcoords='offset pixels', ha='center')
+
+    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=True):
+        """
+        :param filename: Specify filename if different from standard
+        :param adjust_map: Adjust map boundaries to the wind
+        :param wind_nointerp: Draw wind as piecewise constant (pcolormesh plot)
+        """
+        filename = self.wind_fname if filename is None else filename
+        filepath = os.path.join(self.output_dir, filename)
 
         # Wind is piecewise constant
         wind_nointerp = True
 
-        with h5py.File(os.path.join(self.output_path, filename), 'r') as f:
+        with h5py.File(filepath, 'r') as f:
             nt, nx, ny, _ = f['data'].shape
             X = np.zeros((nx, ny))
             Y = np.zeros((nx, ny))
@@ -295,6 +364,8 @@ class Display:
                 self.y_min = np.min(Y)
                 self.y_max = np.max(Y)
                 self.setup_map()
+            # To avoid divide by zero
+            eps = (self.x_max - self.x_min) * 1e-6
             alpha_bg = 1.0
 
             # Resize window
@@ -308,17 +379,17 @@ class Display:
             U = f['data'][0, :, :, 0].flatten()
             V = f['data'][0, :, :, 1].flatten()
 
-            norms3d = np.sqrt(f['data'][0, :, :, 0] ** 2 + f['data'][0, :, :, 1] ** 2)
-            norms = np.sqrt(U ** 2 + V ** 2)
-            lognorms = np.log(np.sqrt(U ** 2 + V ** 2))
+            norms3d = np.sqrt(f['data'][0, :, :, 0] ** 2 + f['data'][0, :, :, 1] ** 2) + eps
+            norms = np.sqrt(U ** 2 + V ** 2) + eps
 
             norm = mpl_colors.Normalize()
             norm.autoscale(np.array([self.cm_norm_min, self.cm_norm_max]))
 
             sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
 
-            cb = self.map.colorbar(sm)  # , orientation='vertical')
-            cb.set_label('Wind [m/s]')
+            if self.coords == 'gcs':
+                cb = self.ax.colorbar(sm)  # , orientation='vertical')
+                cb.set_label('Wind [m/s]')
 
             # Wind norm plot
             # znorms3d = scipy.ndimage.zoom(norms3d, 3)
@@ -338,14 +409,14 @@ class Display:
                 kwargs['latlon'] = True
 
             if wind_nointerp:
-                self.map.pcolormesh(zX, zY, znorms3d, **kwargs)
+                self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
             else:
                 znorms3d = scipy.ndimage.zoom(norms3d, 3)
                 zX = scipy.ndimage.zoom(X, 3)
                 zY = scipy.ndimage.zoom(Y, 3)
                 kwargs['antialiased'] = True
                 kwargs['levels'] = 50
-                self.map.contourf(zX, zY, znorms3d, **kwargs)
+                self.ax.contourf(zX, zY, znorms3d, **kwargs)
 
             # Quiver plot
             kwargs = {
@@ -357,7 +428,7 @@ class Display:
             }
             if self.coords == 'gcs':
                 kwargs['latlon'] = True
-            self.map.quiver(X, Y, U / norms, V / norms, **kwargs)  # color=color)
+            self.ax.quiver(X, Y, U / norms, V / norms, **kwargs)  # color=color)
 
             # Stream plot
             kwargs = {'linewidth': 0.3, 'color': (0., 0., 0., alpha_bg)}
@@ -400,8 +471,8 @@ class Display:
             if k == len(self.control) - 1:
                 control_plot.set_xlabel(r"$t\:[s]$")
 
-    def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, color_mode="default", nt_tick=10,
-                  max_time=None, **kwargs):
+    def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, label=0, color_mode="default", nt_tick=10,
+                  max_time=None, nolabels=False, **kwargs):
         """
         Plots the given trajectory according to selected display mode
         :param nt_tick: Total number of ticking points to display (including start and end)
@@ -415,11 +486,23 @@ class Display:
             self.setup()
 
         # Lines
+        if nolabels:
+            p_label = None
+        else:
+            p_label = f'{type} {label}'
+            if p_label not in self.label_list:
+                self.label_list.append(p_label)
+            else:
+                p_label = None
+
+        ls = linestyle[label % len(linestyle)]
         kwargs = {'color': reachability_colors[type]['steps'],
+                  'linestyle': ls,
+                  'label': p_label,
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
-        self.map.plot(points[:last_index - 1, 0], points[:last_index - 1, 1], **kwargs)
+        self.traj_lines.append(self.ax.plot(points[:last_index - 1, 0], points[:last_index - 1, 1], **kwargs))
 
         # Ticks
         ticking_points = np.zeros((nt_tick, 2))
@@ -432,14 +515,14 @@ class Display:
             if abs(t - k * t_tick) < 1.05 * (delta_t / 2.):
                 ticking_points[k, :] = points[j]
                 k += 1
-        kwargs = {'s': 10. if interrupted else 5.,
+        kwargs = {'s': 5.,
                   'c': [reachability_colors[type]["time-tick"]],
                   'marker': 'o',
                   'linewidths': 1.,
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
-        self.map.scatter(ticking_points[1:k, 0], ticking_points[1:k, 1], **kwargs)
+        self.traj_ticks.append(self.ax.scatter(ticking_points[1:k, 0], ticking_points[1:k, 1], **kwargs))
 
         # Last points
         kwargs = {'s': 10. if interrupted else 5.,
@@ -449,7 +532,7 @@ class Display:
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
-        self.map.scatter(points[last_index - 1, 0], points[last_index - 1, 1], **kwargs)
+        self.traj_lp.append(self.ax.scatter(points[last_index - 1, 0], points[last_index - 1, 1], **kwargs))
 
         # if controls:
         #     dt = np.mean(ts[1:] - ts[:-1])
@@ -471,18 +554,26 @@ class Display:
         #                                  label=label,
         #                                  marker=None)
 
-    def draw_trajs(self, filename, nt_tick=None, max_time=None):
-        with h5py.File(os.path.join(self.output_path, filename), 'r') as f:
+    def draw_trajs(self, filename=None, nolabels=False):
+        filename = self.trajs_fname if filename is None else filename
+        filepath = os.path.join(self.output_dir, filename)
+        with h5py.File(filepath, 'r') as f:
             for traj in f.values():
                 if traj.attrs['coords'] != self.coords:
                     print(f'Warning : traj coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
                 kwargs = {
                     'color_mode': 'reachability',
                 }
-                if nt_tick is not None:
-                    kwargs['nt_tick'] = nt_tick
-                if max_time is not None:
-                    kwargs['max_time'] = max_time
+                if self.nt_tick is not None:
+                    kwargs['nt_tick'] = self.nt_tick
+                if self.max_time is not None:
+                    kwargs['max_time'] = self.max_time
+
+                try:
+                    label = int(traj.attrs['label'])
+                except KeyError:
+                    label = 0
+
                 self.plot_traj(traj['data'],
                                traj['controls'],
                                traj['ts'],
@@ -490,37 +581,97 @@ class Display:
                                traj.attrs['last_index'],
                                traj.attrs['interrupted'],
                                traj.attrs['coords'],
+                               label=label,
+                               nolabels=nolabels,
                                **kwargs)
 
-    def draw_rff(self, filename, timeindex=None, debug=False):
-        kwargs = {
-            'zorder': ZO_RFF,
-            'cmap': 'brg',
-            'antialiased': True
-        }
-        if self.coords == 'gcs':
-            kwargs['latlon'] = True
-        with h5py.File(os.path.join(self.output_path, filename), 'r') as f:
+    def draw_rff(self, filename=None, timeindex=None, debug=False):
+        filename = self.rff_fname if filename is None else filename
+        filepath = os.path.join(self.output_dir, filename)
+        with h5py.File(filepath, 'r') as f:
+            kwargs = {
+                'zorder': ZO_RFF,
+                'cmap': 'brg',
+                'antialiased': True
+            }
+            if self.coords == 'gcs':
+                kwargs['latlon'] = True
             nt, nx, ny = f['data'].shape
             ts_list = [timeindex] if timeindex is not None else range(nt)
             for k in ts_list:
                 args = (f['grid'][:, :, 0], f['grid'][:, :, 1], f['data'][k, :, :]) + (
                     ([-1000., 1000.],) if not debug else ())
-                self.map.contourf(*args, **kwargs)
+                self.rff_contours.append(self.ax.contourf(*args, **kwargs))
+
+    def load_params(self, fname=None):
+        """
+        Load necessary data from parameter file.
+        Currently only loads time window upper bound and trajectory ticking option
+        :param fname: The parameters filename if different from standard
+        """
+        fname = self.params_fname if fname is None else fname
+        with open(os.path.join(self.output_dir, fname), 'r') as f:
+            params = json.load(f)
+        try:
+            self.nt_tick = params['nt_rft']
+        except KeyError:
+            pass
+        try:
+            self.max_time = params['max_time']
+        except KeyError:
+            pass
 
     def show_params(self, fname=None):
-        fname = self.params_fname if fname is None else fname
-        with open(os.path.join(self.output_path, fname), 'r') as f:
-            params = json.load(f)
-
-        ps = ParamsSummary(style=self.params_ss_fname)
-        md = ps.process_params(params)
-        path = os.path.join(self.output_path, 'params.html')
-        with open(path, "w", encoding="utf-8", errors="xmlcharrefreplace") as output_file:
-            output_file.write(md)
-        shutil.copyfile(os.path.join(self.params_ss_path, self.params_ss_fname),
-                        os.path.join(self.output_path, self.params_ss_fname))
-        webbrowser.open(path)
+        fname = self.params_fname_formatted if fname is None else fname
+        path = os.path.join(self.output_dir, fname)
+        if not os.path.isfile(path):
+            print('Parameters HTML file not found', file=sys.stderr)
+        else:
+            webbrowser.open(path)
 
     def set_output_path(self, path):
-        self.output_path = path
+        self.output_dir = path
+
+    def set_title(self, title):
+        self.title = title
+
+    def set_coords(self, coords):
+        self.coords = coords
+
+    def reload(self, event):
+        t_start = time.time()
+        print('Reloading... ', end='')
+
+        # Reload trajs
+        if len(self.traj_lines) != 0:
+            for l in self.traj_lines:
+                for a in l:
+                    a.remove()
+            for a in self.traj_lp:
+                a.remove()
+            for a in self.traj_ticks:
+                a.remove()
+            self.traj_lines = []
+            self.traj_ticks = []
+            self.traj_lp = []
+            self.draw_trajs()
+
+        # Reload RFFs
+        print(len(self.rff_contours))
+        if len(self.rff_contours) != 0:
+            for c in self.rff_contours:
+                for coll in c.collections:
+                    plt.gca().collections.remove(coll)
+            self.rff_contours = []
+            self.draw_rff()
+
+        # Redraw
+        self.mainfig.canvas.draw()  # redraw the figure
+        t_end = time.time()
+        print(f'Done ({t_end - t_start:.3f}s)')
+
+    def show(self):
+        self.show_params()
+        plt.legend()
+        plt.show()
+
