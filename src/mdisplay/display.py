@@ -69,6 +69,7 @@ class Display:
         self.max_time = None
         # Number of expected time major ticks on trajectories
         self.nt_tick = None
+        self.t_tick = None
 
         self.output_dir = None
         self.params_fname = 'params.json'
@@ -77,6 +78,9 @@ class Display:
         self.wind_fname = 'wind.h5'
         self.trajs_fname = 'trajectories.h5'
         self.rff_fname = 'rff.h5'
+        self.wind_fpath = None
+        self.trajs_fpath = None
+        self.rff_fpath = None
 
         self.traj_artists = []
         self.traj_lines = []
@@ -191,15 +195,14 @@ class Display:
 
         self.ax_rbutton = self.mainfig.add_axes([0.44, 0.025, 0.08, 0.05])
         self.reload_button = Button(self.ax_rbutton, 'Reload', color='white',
-                                     hovercolor='grey')
+                                    hovercolor='grey')
         self.reload_button.label.set_fontsize(fsc.button_fontsize)
         self.reload_button.on_clicked(self.reload)
 
         self.ax_cbutton = self.mainfig.add_axes([0.54, 0.025, 0.08, 0.05])
-        self.control_button = CheckButtons(self.ax_cbutton, ['Controls'], [True])
+        self.control_button = CheckButtons(self.ax_cbutton, ['Controls'], [not self.nocontrols])
         self.control_button.labels[0].set_fontsize(fsc.button_fontsize)
         self.control_button.on_clicked(self.toggle_controls)
-
 
     def setup_cm(self):
         cm_values = CM_WINDY_TRUNCATED
@@ -229,10 +232,6 @@ class Display:
         """
         cartesian = (self.coords == 'cartesian')
         gcs = (self.coords == 'gcs')
-        if cartesian:
-            self.mainax.axhline(y=0, color='k', linewidth=0.5)
-            self.mainax.axvline(x=0, color='k', linewidth=0.5)
-            self.mainax.axvline(x=1., color='k', linewidth=0.5)
 
         if gcs:
             kwargs = {
@@ -290,13 +289,18 @@ class Display:
                                    dashes=dashes)
 
         if cartesian:
-            self.mainax.set_xlim(self.x_min, self.x_max)
-            self.mainax.set_ylim(self.y_min, self.y_max)
+            self.mainax.axhline(y=0, color='k', linewidth=0.5)
+            self.mainax.axvline(x=0, color='k', linewidth=0.5)
+            self.mainax.axvline(x=1., color='k', linewidth=0.5)
+            if self.axes_equal:
+                self.mainax.axis('equal')
+            self.mainax.set_xlim(self.x_min - self.x_offset * (self.x_max - self.x_min),
+                                 self.x_max + self.x_offset * (self.x_max - self.x_min))
+            self.mainax.set_ylim(self.y_min - self.y_offset * (self.y_max - self.y_min),
+                                 self.y_max + self.y_offset * (self.y_max - self.y_min))
             self.mainax.set_xlabel('$x$ [m]')
             self.mainax.set_ylabel('$y$ [m]')
             self.mainax.grid(visible=True, linestyle='-.', linewidth=0.5)
-            if self.axes_equal:
-                self.mainax.axis('equal')
             self.mainax.tick_params(direction='in')
 
         if cartesian:
@@ -349,13 +353,15 @@ class Display:
         :param adjust_map: Adjust map boundaries to the wind
         :param wind_nointerp: Draw wind as piecewise constant (pcolormesh plot)
         """
-        filename = self.wind_fname if filename is None else filename
-        filepath = os.path.join(self.output_dir, filename)
+
+        if self.wind_fpath is None:
+            filename = self.wind_fname if filename is None else filename
+            self.wind_fpath = os.path.join(self.output_dir, filename)
 
         # Wind is piecewise constant
         wind_nointerp = wind_nointerp
 
-        with h5py.File(filepath, 'r') as f:
+        with h5py.File(self.wind_fpath, 'r') as f:
             nt, nx, ny, _ = f['data'].shape
             X = np.zeros((nx, ny))
             Y = np.zeros((nx, ny))
@@ -392,6 +398,9 @@ class Display:
 
             if self.coords == 'gcs':
                 cb = self.ax.colorbar(sm)  # , orientation='vertical')
+                cb.set_label('Wind [m/s]')
+            elif self.coords == 'cartesian':
+                cb = self.mainfig.colorbar(sm, ax=self.ax)
                 cb.set_label('Wind [m/s]')
 
             # Wind norm plot
@@ -475,14 +484,14 @@ class Display:
     #             control_plot.set_xlabel(r"$t\:[s]$")
 
     def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, label=0, color_mode="default",
-                  nt_tick=10,
+                  nt_tick=13,
                   max_time=None, nolabels=False, **kwargs):
         """
         Plots the given trajectory according to selected display mode
         :param nt_tick: Total number of ticking points to display (including start and end)
         """
         duration = (ts[last_index - 1] - ts[0])
-        t_tick = max_time / (nt_tick - 1)
+        self.t_tick = max_time / (nt_tick - 1)
         if not self.display_setup:
             self.setup()
 
@@ -515,7 +524,7 @@ class Display:
             if j >= last_index:
                 break
             # if abs(t - k * t_tick) < 1.05 * (delta_t / 2.):
-            if t - k * t_tick > -1e-3:
+            if t - k * self.t_tick > -1e-3:
                 if k >= ticking_points.shape[0]:
                     # Reallocate ticking points on demand
                     n_p, n_d = ticking_points.shape
@@ -562,8 +571,8 @@ class Display:
             kwargs['scale'] = 1 / factor
             kwargs['units'] = 'xy'
         elif self.coords == 'cartesian':
-            kwargs['width'] = max(self.x_max - self.x_min, self.y_max - self.y_min) / 500
-            kwargs['scale'] = max(self.x_max - self.x_min, self.y_max - self.y_min) * 50.
+            kwargs['width'] = 1 / 500
+            kwargs['scale'] = 50
 
         if not self.nocontrols:
             self.traj_controls.append(self.ax.quiver(ticking_points[1:k, 0],
@@ -596,9 +605,12 @@ class Display:
         #                                  marker=None)
 
     def draw_trajs(self, filename=None, nolabels=False):
-        filename = self.trajs_fname if filename is None else filename
-        filepath = os.path.join(self.output_dir, filename)
-        with h5py.File(filepath, 'r') as f:
+
+        if self.trajs_fpath is None:
+            filename = self.trajs_fname if filename is None else filename
+            self.trajs_fpath = os.path.join(self.output_dir, filename)
+
+        with h5py.File(self.trajs_fpath, 'r') as f:
             for traj in f.values():
                 if traj.attrs['coords'] != self.coords:
                     print(f'Warning : traj coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
@@ -627,9 +639,13 @@ class Display:
                                **kwargs)
 
     def draw_rff(self, filename=None, timeindex=None, debug=False):
-        filename = self.rff_fname if filename is None else filename
-        filepath = os.path.join(self.output_dir, filename)
-        with h5py.File(filepath, 'r') as f:
+        if self.rff_fpath is None:
+            filename = self.rff_fname if filename is None else filename
+            self.rff_fpath = os.path.join(self.output_dir, filename)
+        if not os.path.exists(self.rff_fpath):
+            print(f'Failed to load RFF : File not found "{self.rff_fpath}"', file=sys.stderr)
+            return
+        with h5py.File(self.rff_fpath, 'r') as f:
             kwargs = {
                 'zorder': ZO_RFF,
                 'cmap': 'brg',
@@ -708,7 +724,10 @@ class Display:
         if len(self.rff_contours) != 0:
             for c in self.rff_contours:
                 for coll in c.collections:
-                    plt.gca().collections.remove(coll)
+                    try:
+                        plt.gca().collections.remove(coll)
+                    except ValueError:
+                        pass
             self.rff_contours = []
             self.draw_rff()
 
@@ -727,6 +746,12 @@ class Display:
                 a.remove()
             self.traj_controls = []
             self.mainfig.canvas.draw()  # redraw the figure
+
+    def update_title(self):
+        fmax_time = f'{self.max_time/3600:.1f}h' if self.max_time > 1800. else f'{self.max_time:.2E}'
+        ft_tick = f'{self.t_tick/3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
+        self.title += f' (ticks : {ft_tick})'
+        self.mainfig.suptitle(self.title)
 
     def show(self, noparams=False):
         if not noparams:
