@@ -9,6 +9,7 @@ class FontsizeConf:
         self.xtick_labelsize = 10
         self.ytick_labelsize = 10
         self.legend_fontsize = 14
+        self.button_fontsize = 10
         self.font_family = 'ibm plex sans' # 'lato'
         self.mathtext_fontset = 'cm'
 

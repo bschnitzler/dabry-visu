@@ -1,7 +1,6 @@
 import colorsys
 import json
 import os
-import shutil
 import sys
 import webbrowser
 
@@ -9,17 +8,11 @@ import matplotlib.cm as mpl_cm
 import matplotlib.colors as mpl_colors
 import matplotlib.pyplot as plt
 
-from matplotlib.widgets import Button
-from IPython.lib.display import IFrame
-from matplotlib.gridspec import GridSpec
+from matplotlib.widgets import Button, CheckButtons
 from mpl_toolkits.basemap import Basemap
 import h5py
 import scipy.ndimage
-from math import floor
-from geopy import Nominatim
-import datetime
-import markdown
-from IPython.core.display import display, HTML
+from math import floor, cos, sin
 import time
 
 from mdisplay.font_config import FontsizeConf
@@ -35,7 +28,7 @@ class Display:
     Defines all the visualization functions for navigation problems
     """
 
-    def __init__(self, coords='cartesian', mode='only-map', title='Title', projection='merc'):
+    def __init__(self, coords='cartesian', mode='only-map', title='Title', projection='merc', nocontrols=False):
         """
         :param coords: Either 'cartesian' for planar problems or 'gcs' for Earth-based problems
         """
@@ -89,14 +82,23 @@ class Display:
         self.traj_lines = []
         self.traj_ticks = []
         self.traj_lp = []
+        self.traj_controls = []
 
         self.rff_contours = []
 
         self.label_list = []
 
+        self.nocontrols = nocontrols
+
+        self.ax_rbutton = None
+        self.ax_cbutton = None
+        self.control_button = None
+
         self.geodata = GeoData()
 
-    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None):
+    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='merc'):
+
+        self.projection = projection
 
         if bl is None:
             if self.output_dir is None:
@@ -187,52 +189,20 @@ class Display:
         # self.setup_components()
         self.display_setup = True
 
-        self.ax_button = self.mainfig.add_axes([0.44, 0.025, 0.08, 0.05])
-        # properties of the button
-        self.grid_button = Button(self.ax_button, 'Reload', color='white', hovercolor='grey')
+        self.ax_rbutton = self.mainfig.add_axes([0.44, 0.025, 0.08, 0.05])
+        self.reload_button = Button(self.ax_rbutton, 'Reload', color='white',
+                                     hovercolor='grey')
+        self.reload_button.label.set_fontsize(fsc.button_fontsize)
+        self.reload_button.on_clicked(self.reload)
 
-        # triggering event is the clicking
-        self.grid_button.on_clicked(self.reload)
+        self.ax_cbutton = self.mainfig.add_axes([0.54, 0.025, 0.08, 0.05])
+        self.control_button = CheckButtons(self.ax_cbutton, ['Controls'], [True])
+        self.control_button.labels[0].set_fontsize(fsc.button_fontsize)
+        self.control_button.on_clicked(self.toggle_controls)
+
 
     def setup_cm(self):
-        # Windy default cm
-        cm_values = [[0, [98, 113, 183, 255]],
-                     [1, [57, 97, 159, 255]],
-                     [3, [74, 148, 169, 255]],
-                     [5, [77, 141, 123, 255]],
-                     [7, [83, 165, 83, 255]],
-                     [9, [53, 159, 53, 255]],
-                     [11, [167, 157, 81, 255]],
-                     [13, [159, 127, 58, 255]],
-                     [15, [161, 108, 92, 255]],
-                     [17, [129, 58, 78, 255]],
-                     [19, [175, 80, 136, 255]],
-                     [21, [117, 74, 147, 255]],
-                     [24, [109, 97, 163, 255]],
-                     [27, [68, 105, 141, 255]],
-                     [29, [92, 144, 152, 255]],
-                     [36, [125, 68, 165, 255]],
-                     [46, [231, 215, 215, 256]],
-                     [51, [219, 212, 135, 256]],
-                     [77, [205, 202, 112, 256]],
-                     [104, [128, 128, 128, 255]]]
-        # Truncated Windy cm
-        cm_values = [[0, [98, 113, 183, 255]],
-                     [1, [57, 97, 159, 255]],
-                     [3, [74, 148, 169, 255]],
-                     [5, [77, 141, 123, 255]],
-                     [7, [83, 165, 83, 255]],
-                     [9, [53, 159, 53, 255]],
-                     [11, [167, 157, 81, 255]],
-                     [13, [159, 127, 58, 255]],
-                     [15, [161, 108, 92, 255]],
-                     [17, [129, 58, 78, 255]],
-                     [19, [175, 80, 136, 255]],
-                     [21, [117, 74, 147, 255]],
-                     [24, [109, 97, 163, 255]],
-                     [27, [68, 105, 141, 255]],
-                     [29, [92, 144, 152, 255]],
-                     [36, [125, 68, 165, 255]]]
+        cm_values = CM_WINDY_TRUNCATED
         self.cm_norm_min = 0.
         self.cm_norm_max = 36.
 
@@ -257,36 +227,69 @@ class Display:
         """
         Sets the display of the map
         """
-        CARTESIAN = (self.coords == 'cartesian')
-        GCS = (self.coords == 'gcs')
-        if CARTESIAN:
+        cartesian = (self.coords == 'cartesian')
+        gcs = (self.coords == 'gcs')
+        if cartesian:
             self.mainax.axhline(y=0, color='k', linewidth=0.5)
             self.mainax.axvline(x=0, color='k', linewidth=0.5)
             self.mainax.axvline(x=1., color='k', linewidth=0.5)
 
-        if GCS:
-            self.map = Basemap(llcrnrlon=self.x_min - self.x_offset * (self.x_max - self.x_min),
-                               llcrnrlat=self.y_min - self.y_offset * (self.y_max - self.y_min),
-                               urcrnrlon=self.x_max + self.x_offset * (self.x_max - self.x_min),
-                               urcrnrlat=self.y_max + self.y_offset * (self.y_max - self.y_min),
-                               # rsphere=(6378137.00, 6356752.3142),
-                               resolution='l', projection=self.projection,
-                               ax=self.mainax)
+        if gcs:
+            kwargs = {
+                'resolution': 'l',
+                'projection': self.projection,
+                'ax': self.mainax
+            }
+            # Don't plot coastal lines features less than 1000km^2
+            # kwargs['area_thresh'] = (6400e3 * np.pi / 180) ** 2 * (self.x_max - self.x_min) * 0.5 * (
+            #             self.y_min + self.y_max) / 1000.
+
+            if self.projection == 'merc':
+                kwargs['llcrnrlon'] = self.x_min - self.x_offset * (self.x_max - self.x_min)
+                kwargs['llcrnrlat'] = self.y_min - self.y_offset * (self.y_max - self.y_min)
+                kwargs['urcrnrlon'] = self.x_max + self.x_offset * (self.x_max - self.x_min)
+                kwargs['urcrnrlat'] = self.y_max + self.y_offset * (self.y_max - self.y_min)
+
+            elif self.projection == 'ortho':
+                kwargs['lon_0'] = 0.5 * (self.x_min + self.x_max)
+                kwargs['lat_0'] = 0.5 * (self.y_min + self.y_max)
+
+            elif self.projection == 'lcc':
+                kwargs['lon_0'] = 0.5 * (self.x_min + self.x_max)
+                kwargs['lat_0'] = 0.5 * (self.y_min + self.y_max)
+                kwargs['lat_1'] = self.y_max + self.y_offset * (self.y_max - self.y_min)
+                kwargs['lat_2'] = self.y_min - self.y_offset * (self.y_max - self.y_min)
+                kwargs['width'] = (1 + self.x_offset) * (self.x_max - self.x_min) / 180 * np.pi * EARTH_RADIUS
+                kwargs['height'] = kwargs[
+                    'width']  # 1.5* (1 + self.y_offset) * (self.y_max - self.y_min) / 180 * np.pi * 6400e3
+
+            else:
+                print(f'Projection type "{self.projection}" not handled yet', file=sys.stderr)
+                exit(1)
+
+            self.map = Basemap(**kwargs)
+
             # self.map.shadedrelief()
             self.map.drawcoastlines()
             self.map.fillcontinents()
+            lw = 0.5
+            dashes = (2, 2)
             # draw parallels
             lat_min = min(self.y_min, self.y_max)
             lat_max = max(self.y_min, self.y_max)
             n_lat = floor((lat_max - lat_min) / 10) + 2
-            self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0])
+            self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0],
+                                   linewidth=lw,
+                                   dashes=dashes)
             # draw meridians
             lon_min = min(self.x_min, self.x_max)
             lon_max = max(self.x_min, self.x_max)
             n_lon = floor((lon_max - lon_min) / 10) + 2
-            self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 1, 0, 1])
+            self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 0, 0, 1],
+                                   linewidth=lw,
+                                   dashes=dashes)
 
-        if CARTESIAN:
+        if cartesian:
             self.mainax.set_xlim(self.x_min, self.x_max)
             self.mainax.set_ylim(self.y_min, self.y_max)
             self.mainax.set_xlabel('$x$ [m]')
@@ -296,9 +299,9 @@ class Display:
                 self.mainax.axis('equal')
             self.mainax.tick_params(direction='in')
 
-        if CARTESIAN:
+        if cartesian:
             self.ax = self.mainax
-        if GCS:
+        if gcs:
             self.ax = self.map
 
     def setup_map_adj(self):
@@ -308,8 +311,8 @@ class Display:
         self.map_adjoint.set_xlim(-1.1, 1.1)
         self.map_adjoint.set_ylim(-1.1, 1.1)
 
-        self.map_adjoint.set_xlabel('$p_x\;[s/m]$')
-        self.map_adjoint.set_ylabel('$p_y\;[s/m]$')
+        self.map_adjoint.set_xlabel(r'$p_x\;[s/m]$')
+        self.map_adjoint.set_ylabel(r'$p_y\;[s/m]$')
 
         self.map_adjoint.grid(visible=True, linestyle='-.', linewidth=0.5)
         self.map_adjoint.tick_params(direction='in')
@@ -350,7 +353,7 @@ class Display:
         filepath = os.path.join(self.output_dir, filename)
 
         # Wind is piecewise constant
-        wind_nointerp = True
+        wind_nointerp = wind_nointerp
 
         with h5py.File(filepath, 'r') as f:
             nt, nx, ny, _ = f['data'].shape
@@ -452,36 +455,34 @@ class Display:
             # cb.ax.semilogy()
             # cb.ax.yaxis.set_major_formatter(mpl_ticker.LogFormatter())#mpl_ticker.FuncFormatter(lambda s, pos: (np.exp(s*np.log(10)), pos)))
 
-    def setup_components(self):
-        for k, state_plot in enumerate(self.state):
-            state_plot.grid(visible=True, linestyle='-.', linewidth=0.5)
-            state_plot.tick_params(direction='in')
-            state_plot.yaxis.set_label_position("right")
-            state_plot.yaxis.tick_right()
-            state_plot.set_ylabel(state_names[k])
-            plt.setp(state_plot.get_xticklabels(), visible=False)
+    # def setup_components(self):
+    #     for k, state_plot in enumerate(self.state):
+    #         state_plot.grid(visible=True, linestyle='-.', linewidth=0.5)
+    #         state_plot.tick_params(direction='in')
+    #         state_plot.yaxis.set_label_position("right")
+    #         state_plot.yaxis.tick_right()
+    #         state_plot.set_ylabel(state_names[k])
+    #         plt.setp(state_plot.get_xticklabels(), visible=False)
+    #
+    #     for k, control_plot in enumerate(self.control):
+    #         control_plot.grid(visible=True, linestyle='-.', linewidth=0.5)
+    #         control_plot.tick_params(direction='in')
+    #         control_plot.yaxis.set_label_position("right")
+    #         control_plot.yaxis.tick_right()
+    #         control_plot.set_ylabel(control_names[k])
+    #         # Last plot
+    #         if k == len(self.control) - 1:
+    #             control_plot.set_xlabel(r"$t\:[s]$")
 
-        for k, control_plot in enumerate(self.control):
-            control_plot.grid(visible=True, linestyle='-.', linewidth=0.5)
-            control_plot.tick_params(direction='in')
-            control_plot.yaxis.set_label_position("right")
-            control_plot.yaxis.tick_right()
-            control_plot.set_ylabel(control_names[k])
-            # Last plot
-            if k == len(self.control) - 1:
-                control_plot.set_xlabel(r"$t\:[s]$")
-
-    def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, label=0, color_mode="default", nt_tick=10,
+    def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, label=0, color_mode="default",
+                  nt_tick=10,
                   max_time=None, nolabels=False, **kwargs):
         """
         Plots the given trajectory according to selected display mode
         :param nt_tick: Total number of ticking points to display (including start and end)
         """
-        if max_time is not None:
-            duration = max_time
-        else:
-            duration = (ts[-1] - ts[0])
-        t_tick = duration / (nt_tick - 1)
+        duration = (ts[last_index - 1] - ts[0])
+        t_tick = max_time / (nt_tick - 1)
         if not self.display_setup:
             self.setup()
 
@@ -506,14 +507,36 @@ class Display:
 
         # Ticks
         ticking_points = np.zeros((nt_tick, 2))
+        ticking_controls = np.zeros((nt_tick, 2))
         nt = ts.shape[0]
-        delta_t = duration / (nt - 1)
+        # delta_t = max_time / (nt - 1)
         k = 0
         for j, t in enumerate(ts):
             if j >= last_index:
                 break
-            if abs(t - k * t_tick) < 1.05 * (delta_t / 2.):
+            # if abs(t - k * t_tick) < 1.05 * (delta_t / 2.):
+            if t - k * t_tick > -1e-3:
+                if k >= ticking_points.shape[0]:
+                    # Reallocate ticking points on demand
+                    n_p, n_d = ticking_points.shape
+                    _save = np.zeros((n_p, n_d))
+                    _save[:] = ticking_points
+                    ticking_points = np.zeros((n_p * 10, n_d))
+                    ticking_points[:n_p] = _save[:]
+
+                    # Reallocate controls too
+                    n_p, n_d = ticking_controls.shape
+                    _save = np.zeros((n_p, n_d))
+                    _save[:] = ticking_controls
+                    ticking_controls = np.zeros((n_p * 10, n_d))
+                    ticking_controls[:n_p] = _save[:]
+
                 ticking_points[k, :] = points[j]
+
+                if self.coords == 'cartesian':
+                    ticking_controls[k] = np.array([cos(controls[j]), sin(controls[j])])
+                elif self.coords == 'gcs':
+                    ticking_controls[k] = np.array([sin(controls[j]), cos(controls[j])])
                 k += 1
         kwargs = {'s': 5.,
                   'c': [reachability_colors[type]["time-tick"]],
@@ -522,7 +545,31 @@ class Display:
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
+
         self.traj_ticks.append(self.ax.scatter(ticking_points[1:k, 0], ticking_points[1:k, 1], **kwargs))
+
+        # Heading vectors
+        factor = 1. if self.coords == 'cartesian' else EARTH_RADIUS / 180 * np.pi
+        kwargs = {
+            'color': (0.2, 0.2, 0.2, 1.0),
+            'pivot': 'tail',
+            'alpha': 1.0,
+            'zorder': ZO_WIND_VECTORS
+        }
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+            kwargs['width'] = factor ** 2 / 1000000
+            kwargs['scale'] = 1 / factor
+            kwargs['units'] = 'xy'
+        elif self.coords == 'cartesian':
+            kwargs['width'] = max(self.x_max - self.x_min, self.y_max - self.y_min) / 500
+            kwargs['scale'] = max(self.x_max - self.x_min, self.y_max - self.y_min) * 50.
+
+        if not self.nocontrols:
+            self.traj_controls.append(self.ax.quiver(ticking_points[1:k, 0],
+                                                     ticking_points[1:k, 1],
+                                                     ticking_controls[1:k, 0],
+                                                     ticking_controls[1:k, 1], **kwargs))
 
         # Last points
         kwargs = {'s': 10. if interrupted else 5.,
@@ -534,12 +581,6 @@ class Display:
             kwargs['latlon'] = True
         self.traj_lp.append(self.ax.scatter(points[last_index - 1, 0], points[last_index - 1, 1], **kwargs))
 
-        # if controls:
-        #     dt = np.mean(ts[1:] - ts[:-1])
-        #     for k, point in enumerate(points):
-        #         u = controls[k]
-        #         _s = np.array([np.cos(u), np.sin(u)]) * dt
-        #         self.map.arrow(point[0], point[1], _s[0], _s[1], width=0.0001, color=colors[k])
         # if self.mode == "full":
         #     for k in range(points.shape[1]):
         #         self.state[k].plot(ts[:last_index], points[:last_index, k])
@@ -642,6 +683,9 @@ class Display:
         t_start = time.time()
         print('Reloading... ', end='')
 
+        # Reload params
+        self.load_params()
+
         # Reload trajs
         if len(self.traj_lines) != 0:
             for l in self.traj_lines:
@@ -651,9 +695,12 @@ class Display:
                 a.remove()
             for a in self.traj_ticks:
                 a.remove()
+            for a in self.traj_controls:
+                a.remove()
             self.traj_lines = []
             self.traj_ticks = []
             self.traj_lp = []
+            self.traj_controls = []
             self.draw_trajs()
 
         # Reload RFFs
@@ -670,8 +717,18 @@ class Display:
         t_end = time.time()
         print(f'Done ({t_end - t_start:.3f}s)')
 
-    def show(self):
-        self.show_params()
-        plt.legend()
-        plt.show()
+    def legend(self):
+        self.mainfig.legend()
 
+    def toggle_controls(self, _):
+        self.nocontrols = not self.nocontrols
+        if self.nocontrols:
+            for a in self.traj_controls:
+                a.remove()
+            self.traj_controls = []
+            self.mainfig.canvas.draw()  # redraw the figure
+
+    def show(self, noparams=False):
+        if not noparams:
+            self.show_params()
+        plt.show()
