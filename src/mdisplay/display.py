@@ -71,6 +71,11 @@ class Display:
         self.nt_tick = None
         self.t_tick = None
 
+        # Solver settings
+        self.x_init = None
+        self.x_target = None
+        self.opti_ceil = None
+
         self.output_dir = None
         self.params_fname = 'params.json'
         self.params_fname_formatted = 'params.html'
@@ -97,6 +102,7 @@ class Display:
         self.ax_rbutton = None
         self.ax_cbutton = None
         self.control_button = None
+        self.ax_info = None
 
         self.geodata = GeoData()
 
@@ -186,7 +192,6 @@ class Display:
             # gs = GridSpec(1, 2, figure=self.mainfig, wspace=.25)
             # self.map = self.mainfig.add_subplot(gs[0, 0])
             # self.map_adjoint = self.mainfig.add_subplot(gs[0, 1])  # , projection="polar")
-        self.setup_cm()
         self.setup_map()
         if self.mode == "full-adjoint":
             self.setup_map_adj()
@@ -204,27 +209,9 @@ class Display:
         self.control_button.labels[0].set_fontsize(fsc.button_fontsize)
         self.control_button.on_clicked(self.toggle_controls)
 
-    def setup_cm(self):
-        cm_values = CM_WINDY_TRUNCATED
-        self.cm_norm_min = 0.
-        self.cm_norm_max = 36.
+        self.ax_info = self.mainfig.text(0.34, 0.025, ' ')
 
-        def lighten(c):
-            hls = colorsys.rgb_to_hls(*(np.array(c[:3]) / 256.))
-            hls = (hls[0], 0.5 + 0.5 * hls[1], 0.6 + 0.4 * hls[2])
-            res = list(colorsys.hls_to_rgb(*hls)) + [c[3] / 256.]
-            return res
 
-        newcolors = np.array(lighten(cm_values[0][1]))
-        for ii in range(len(cm_values) - 1):
-            j_min = 10 * cm_values[ii - 1][0]
-            j_max = 10 * cm_values[ii][0]
-            for j in range(j_min, j_max):
-                c1 = np.array(lighten(cm_values[ii - 1][1]))
-                c2 = np.array(lighten(cm_values[ii][1]))
-                t = (j - j_min) / (j_max - j_min)
-                newcolors = np.vstack((newcolors, (1 - t) * c1 + t * c2))
-        self.cm = mpl_colors.ListedColormap(newcolors, name='Windy')
 
     def setup_map(self):
         """
@@ -347,7 +334,7 @@ class Display:
         if label is not None:
             self.ax.annotate(label, pos_annot, (10, 10), textcoords='offset pixels', ha='center')
 
-    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=True):
+    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=True, autoscale=False):
         """
         :param filename: Specify filename if different from standard
         :param adjust_map: Adjust map boundaries to the wind
@@ -392,7 +379,12 @@ class Display:
             norms = np.sqrt(U ** 2 + V ** 2) + eps
 
             norm = mpl_colors.Normalize()
-            norm.autoscale(np.array([self.cm_norm_min, self.cm_norm_max]))
+            if autoscale:
+                self.cm = 'Blues_r'
+                norm.autoscale(norms)
+            else:
+                self.cm = windy_cm
+                norm.autoscale(np.array([windy_cm.norm_min, windy_cm.norm_max]))
 
             sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
 
@@ -485,7 +477,7 @@ class Display:
 
     def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, label=0, color_mode="default",
                   nt_tick=13,
-                  max_time=None, nolabels=False, **kwargs):
+                  max_time=None, nolabels=False, id=0, **kwargs):
         """
         Plots the given trajectory according to selected display mode
         :param nt_tick: Total number of ticking points to display (including start and end)
@@ -509,6 +501,7 @@ class Display:
         kwargs = {'color': reachability_colors[type]['steps'],
                   'linestyle': ls,
                   'label': p_label,
+                  'gid': id,
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
@@ -604,14 +597,14 @@ class Display:
         #                                  label=label,
         #                                  marker=None)
 
-    def draw_trajs(self, filename=None, nolabels=False):
+    def draw_trajs(self, filename=None, nolabels=False, opti_only=False):
 
         if self.trajs_fpath is None:
             filename = self.trajs_fname if filename is None else filename
             self.trajs_fpath = os.path.join(self.output_dir, filename)
 
         with h5py.File(self.trajs_fpath, 'r') as f:
-            for traj in f.values():
+            for k, traj in enumerate(f.values()):
                 if traj.attrs['coords'] != self.coords:
                     print(f'Warning : traj coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
                 kwargs = {
@@ -627,16 +620,18 @@ class Display:
                 except KeyError:
                     label = 0
 
-                self.plot_traj(traj['data'],
-                               traj['controls'],
-                               traj['ts'],
-                               traj.attrs['type'],
-                               traj.attrs['last_index'],
-                               traj.attrs['interrupted'],
-                               traj.attrs['coords'],
-                               label=label,
-                               nolabels=nolabels,
-                               **kwargs)
+                if not (opti_only and traj.attrs['type'] not in ['optimal', 'integral']):
+                    self.plot_traj(traj['data'],
+                                   traj['controls'],
+                                   traj['ts'],
+                                   traj.attrs['type'],
+                                   traj.attrs['last_index'],
+                                   traj.attrs['interrupted'],
+                                   traj.attrs['coords'],
+                                   label=label,
+                                   nolabels=nolabels,
+                                   id=traj.attrs['label'],
+                                   **kwargs)
 
     def draw_rff(self, filename=None, timeindex=None, debug=False):
         if self.rff_fpath is None:
@@ -660,6 +655,23 @@ class Display:
                     ([-1000., 1000.],) if not debug else ())
                 self.rff_contours.append(self.ax.contourf(*args, **kwargs))
 
+    def draw_solver(self):
+        kwargs = {}
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+            scatterax = self.map
+        else:
+            scatterax = self.mainax
+        # Init point
+        scatterax.scatter(self.x_init[0], self.x_init[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
+        c = self.map(self.x_init[0], self.x_init[1]) if self.coords == 'gcs' else (self.x_init[0], self.x_init[1])
+        self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
+        # Target point
+        scatterax.scatter(self.x_target[0], self.x_target[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
+        c = self.map(self.x_target[0], self.x_target[1]) if self.coords == 'gcs' else (self.x_target[0], self.x_target[1])
+        self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
+        self.mainax.add_patch(plt.Circle(c, self.opti_ceil))
+
     def load_params(self, fname=None):
         """
         Load necessary data from parameter file.
@@ -670,12 +682,29 @@ class Display:
         with open(os.path.join(self.output_dir, fname), 'r') as f:
             params = json.load(f)
         try:
+            self.coords = params['coords']
+        except KeyError:
+            pass
+        try:
             self.nt_tick = params['nt_rft']
         except KeyError:
             pass
         try:
             self.max_time = params['max_time']
         except KeyError:
+            pass
+        try:
+            self.x_init = params['point_init']
+        except KeyError:
+            pass
+        try:
+            self.x_target = params['point_target']
+        except KeyError:
+            pass
+        try:
+            self.opti_ceil = params['target_radius']
+        except KeyError:
+            print('Failed to load "target_radius"', file=sys.stderr)
             pass
 
     def show_params(self, fname=None):
@@ -749,8 +778,9 @@ class Display:
 
     def update_title(self):
         fmax_time = f'{self.max_time/3600:.1f}h' if self.max_time > 1800. else f'{self.max_time:.2E}'
-        ft_tick = f'{self.t_tick/3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
-        self.title += f' (ticks : {ft_tick})'
+        if self.t_tick is not None:
+            ft_tick = f'{self.t_tick/3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
+            self.title += f' (ticks : {ft_tick})'
         self.mainfig.suptitle(self.title)
 
     def show(self, noparams=False):

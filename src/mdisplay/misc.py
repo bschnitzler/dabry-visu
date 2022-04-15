@@ -1,3 +1,5 @@
+import colorsys
+
 import numpy as np
 
 ZO_WIND_NORM = 1
@@ -46,15 +48,17 @@ reachability_colors = {
         "last": my_orange
     },
     "optimal": {
-        "steps": my_green_t,
-        "time-tick": my_green,
-        "last": my_green
+        "steps": my_red,
+        "time-tick": my_red,
+        "last": my_red
     },
 }
 
 markers = ['o', "1", "2", "3", "4"]
 
-linestyle = ['solid', 'dotted', 'dashed', 'dashdot', (0, (1, 10)), (0, (5, 10)), (0, (3, 5, 1, 5))]
+# linestyle = ['solid', 'dotted', 'dashed', 'dashdot', (0, (1, 10)), (0, (5, 10)), (0, (3, 5, 1, 5))]
+
+linestyle = ['solid']
 
 monocolor_colors = {
     'pmp': my_red_t,
@@ -103,4 +107,32 @@ CM_WINDY_TRUNCATED = [[0, [98, 113, 183, 255]],
                       [24, [109, 97, 163, 255]],
                       [27, [68, 105, 141, 255]],
                       [29, [92, 144, 152, 255]],
-                      [36, [125, 68, 165, 255]]]
+                      [36, [int(1.1 * 125), int(1.1 * 68), int(1.1 * 165), 255]]]
+                      #[36, [125, 68, 165, 255]]]
+
+# Define windy cm
+import matplotlib.colors as mpl_colors
+
+cm_values = CM_WINDY_TRUNCATED
+
+
+def lighten(c):
+    hls = colorsys.rgb_to_hls(*(np.array(c[:3]) / 256.))
+    hls = (hls[0], 0.5 + 0.5 * hls[1], 0.6 + 0.4 * hls[2])
+    res = list(colorsys.hls_to_rgb(*hls)) + [c[3] / 256.]
+    return res
+
+
+newcolors = np.array(lighten(cm_values[0][1]))
+for ii in range(len(cm_values) - 1):
+    j_min = 10 * cm_values[ii - 1][0]
+    j_max = 10 * cm_values[ii][0]
+    for j in range(j_min, j_max):
+        c1 = np.array(lighten(cm_values[ii - 1][1]))
+        c2 = np.array(lighten(cm_values[ii][1]))
+        t = (j - j_min) / (j_max - j_min)
+        newcolors = np.vstack((newcolors, (1 - t) * c1 + t * c2))
+
+windy_cm = mpl_colors.ListedColormap(newcolors, name='Windy')
+windy_cm.norm_min = 0.
+windy_cm.norm_max = 36.

@@ -2,6 +2,8 @@ import os
 import json
 from pathlib import Path
 from geopy import Nominatim
+from math import pi
+import sys
 
 
 class GeoData:
@@ -28,15 +30,18 @@ class GeoData:
             raise UserWarning('GeoData : unable to locate cache, switching to full-Internet mode')
         self.locator = None
 
-    def get_coords(self, name):
+    def get_coords(self, name, units='deg'):
         """
         Get coordinates for corresponding geocode
         :param name: The geodcode
         :return: Coordinates (lon, lat) in degrees
         """
+        if units not in ['deg', 'rad']:
+            print(f'Unknown units "{units}"', file=sys.stderr)
+            exit(1)
         name = name.lower().strip()
         if not self.full_inet and name in self.cache.keys():
-            return self.cache[name]
+            res_deg = self.cache[name]
         else:
             self.locator = Nominatim(user_agent='openstreetmaps')
             loc = self.locator.geocode(name)
@@ -45,7 +50,12 @@ class GeoData:
                 self.cache[name] = point
                 with open(self.cache_path, 'w') as f:
                     json.dump(self.cache, f)
-            return point
+            res_deg = point
+
+        if units == 'rad':
+            return [pi / 180. * res_deg[0], pi / 180. * res_deg[1]]
+        else:
+            return res_deg
 
 if __name__ == '__main__':
     gd = GeoData()
