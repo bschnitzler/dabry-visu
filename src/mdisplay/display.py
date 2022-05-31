@@ -106,7 +106,7 @@ class Display:
 
         self.geodata = GeoData()
 
-    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='merc'):
+    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='ortho'):
 
         self.projection = projection
 
@@ -334,7 +334,7 @@ class Display:
         if label is not None:
             self.ax.annotate(label, pos_annot, (10, 10), textcoords='offset pixels', ha='center')
 
-    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=True, autoscale=False):
+    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=True, autoscale=False, showanchors=False):
         """
         :param filename: Specify filename if different from standard
         :param adjust_map: Adjust map boundaries to the wind
@@ -344,9 +344,6 @@ class Display:
         if self.wind_fpath is None:
             filename = self.wind_fname if filename is None else filename
             self.wind_fpath = os.path.join(self.output_dir, filename)
-
-        # Wind is piecewise constant
-        wind_nointerp = wind_nointerp
 
         with h5py.File(self.wind_fpath, 'r') as f:
             nt, nx, ny, _ = f['data'].shape
@@ -360,9 +357,13 @@ class Display:
                 self.y_min = np.min(Y)
                 self.y_max = np.max(Y)
                 self.setup_map()
-            # To avoid divide by zero
-            eps = (self.x_max - self.x_min) * 1e-6
+
             alpha_bg = 1.0
+            try:
+                # True if wind displaystyle is piecewise constant, else smooth
+                wind_nointerp = not f.attrs['analytical']
+            except KeyError:
+                wind_nointerp = True
 
             # Resize window
 
@@ -375,8 +376,11 @@ class Display:
             U = f['data'][0, :, :, 0].flatten()
             V = f['data'][0, :, :, 1].flatten()
 
-            norms3d = np.sqrt(f['data'][0, :, :, 0] ** 2 + f['data'][0, :, :, 1] ** 2) + eps
-            norms = np.sqrt(U ** 2 + V ** 2) + eps
+
+            norms3d = np.sqrt(f['data'][0, :, :, 0] ** 2 + f['data'][0, :, :, 1] ** 2)
+            norms = np.sqrt(U ** 2 + V ** 2)
+            eps = (np.max(norms) - np.min(norms))*1e-6
+            # norms += eps
 
             norm = mpl_colors.Normalize()
             if autoscale:
@@ -394,6 +398,10 @@ class Display:
             elif self.coords == 'cartesian':
                 cb = self.mainfig.colorbar(sm, ax=self.ax)
                 cb.set_label('Wind [m/s]')
+
+            # Wind anchor plot
+            if showanchors:
+                self.ax.scatter(X, Y, zorder=ZO_WIND_ANCHORS)
 
             # Wind norm plot
             # znorms3d = scipy.ndimage.zoom(norms3d, 3)
@@ -602,7 +610,9 @@ class Display:
         if self.trajs_fpath is None:
             filename = self.trajs_fname if filename is None else filename
             self.trajs_fpath = os.path.join(self.output_dir, filename)
-
+        if not os.path.exists(self.trajs_fpath):
+            print(f'Failed to load trajectories : File not found "{self.trajs_fpath}"', file=sys.stderr)
+            return
         with h5py.File(self.trajs_fpath, 'r') as f:
             for k, traj in enumerate(f.values()):
                 if traj.attrs['coords'] != self.coords:
@@ -655,7 +665,7 @@ class Display:
                     ([-1000., 1000.],) if not debug else ())
                 self.rff_contours.append(self.ax.contourf(*args, **kwargs))
 
-    def draw_solver(self):
+    def draw_solver(self, labeling=True):
         kwargs = {}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
@@ -665,11 +675,13 @@ class Display:
         # Init point
         scatterax.scatter(self.x_init[0], self.x_init[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
         c = self.map(self.x_init[0], self.x_init[1]) if self.coords == 'gcs' else (self.x_init[0], self.x_init[1])
-        self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
+        if labeling:
+            self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
         # Target point
         scatterax.scatter(self.x_target[0], self.x_target[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
         c = self.map(self.x_target[0], self.x_target[1]) if self.coords == 'gcs' else (self.x_target[0], self.x_target[1])
-        self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
+        if labeling:
+            self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
         self.mainax.add_patch(plt.Circle(c, self.opti_ceil))
 
     def load_params(self, fname=None):
@@ -777,11 +789,14 @@ class Display:
             self.mainfig.canvas.draw()  # redraw the figure
 
     def update_title(self):
-        fmax_time = f'{self.max_time/3600:.1f}h' if self.max_time > 1800. else f'{self.max_time:.2E}'
-        if self.t_tick is not None:
-            ft_tick = f'{self.t_tick/3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
-            self.title += f' (ticks : {ft_tick})'
-        self.mainfig.suptitle(self.title)
+        try:
+            fmax_time = f'{self.max_time/3600:.1f}h' if self.max_time > 1800. else f'{self.max_time:.2E}'
+            if self.t_tick is not None:
+                ft_tick = f'{self.t_tick/3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
+                self.title += f' (ticks : {ft_tick})'
+            self.mainfig.suptitle(self.title)
+        except TypeError:
+            pass
 
     def show(self, noparams=False):
         if not noparams:
