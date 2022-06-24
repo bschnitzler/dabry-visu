@@ -9,6 +9,8 @@ ZO_RFF = 4
 ZO_WIND_ANCHORS = 5
 ZO_ANNOT = 5
 
+RAD_TO_DEG = 180. / np.pi
+
 my_red = np.array([0.8, 0., 0., 1.])
 my_red_t = np.diag((1., 1., 1., 0.2)).dot(my_red)
 my_orange = np.array([1., 0.5, 0., 1.])
@@ -54,6 +56,8 @@ reachability_colors = {
         "last": my_red
     },
 }
+
+path_colors = ['b', 'g', 'r', 'c', 'm', 'y']
 
 markers = ['o', "1", "2", "3", "4"]
 

@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 from geopy import Nominatim
+import geopy
 from math import pi
 import sys
 
@@ -43,14 +44,22 @@ class GeoData:
         if not self.full_inet and name in self.cache.keys():
             res_deg = self.cache[name]
         else:
-            self.locator = Nominatim(user_agent='openstreetmaps')
-            loc = self.locator.geocode(name)
-            point = (loc.longitude, loc.latitude)
-            if not self.full_inet:
-                self.cache[name] = point
-                with open(self.cache_path, 'w') as f:
-                    json.dump(self.cache, f)
-            res_deg = point
+            def get_res(force_proxy=False):
+                kwargs = {'user_agent': 'openstreetmaps'}
+                if force_proxy:
+                    kwargs['proxies'] = 'http://proxy:3128/'
+                self.locator = Nominatim(**kwargs)
+                loc = self.locator.geocode(name)
+                point = (loc.longitude, loc.latitude)
+                if not self.full_inet:
+                    self.cache[name] = point
+                    with open(self.cache_path, 'w') as f:
+                        json.dump(self.cache, f)
+                return point
+            try:
+                res_deg = get_res()
+            except geopy.exc.GeocoderUnavailable:
+                res_deg = get_res(force_proxy=True)
 
         if units == 'rad':
             return [pi / 180. * res_deg[0], pi / 180. * res_deg[1]]

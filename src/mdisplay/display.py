@@ -15,6 +15,8 @@ import scipy.ndimage
 from math import floor, cos, sin
 import time
 
+from pyproj import Proj
+
 from mdisplay.font_config import FontsizeConf
 from mdisplay.geodata import GeoData
 from mdisplay.misc import *
@@ -70,6 +72,9 @@ class Display:
         # Number of expected time major ticks on trajectories
         self.nt_tick = None
         self.t_tick = None
+        self.rff_zero_ceil = None
+        self.nx_rft = None
+        self.ny_rft = None
 
         # Solver settings
         self.x_init = None
@@ -77,6 +82,11 @@ class Display:
         self.opti_ceil = None
 
         self.output_dir = None
+        self.output_imgpath = None
+        self.img_params = {
+            'dpi': 300,
+            'format': 'png'
+        }
         self.params_fname = 'params.json'
         self.params_fname_formatted = 'params.html'
 
@@ -106,7 +116,7 @@ class Display:
 
         self.geodata = GeoData()
 
-    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='ortho'):
+    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='ortho', debug=False):
 
         self.projection = projection
 
@@ -139,10 +149,13 @@ class Display:
         if tr_off is not None:
             self.y_offset = tr_off
 
-        self.x_min = x_min
-        self.x_max = x_max
-        self.y_min = y_min
-        self.y_max = y_max
+        self.update_bounds((x_min, y_min), (x_max, y_max))
+
+        # if self.opti_ceil is None:
+        #     self.opti_ceil = 0.0005 * 0.5 * (self.x_max - self.x_min + self.y_max - self.y_min)
+
+        if debug:
+            print(self.x_min, self.x_max, self.y_min, self.y_max)
 
         fsc = FontsizeConf()
         plt.rc('font', size=fsc.fontsize)
@@ -154,7 +167,7 @@ class Display:
         plt.rc('font', family=fsc.font_family)
         plt.rc('mathtext', fontset=fsc.mathtext_fontset)
 
-        self.mainfig = plt.figure(num="Navigation problem", constrained_layout=False)
+        self.mainfig = plt.figure(num=f"Navigation problem ({self.coords})", constrained_layout=False)
         self.mainfig.subplots_adjust(
             top=0.93,
             bottom=0.15,
@@ -211,8 +224,6 @@ class Display:
 
         self.ax_info = self.mainfig.text(0.34, 0.025, ' ')
 
-
-
     def setup_map(self):
         """
         Sets the display of the map
@@ -239,6 +250,12 @@ class Display:
             elif self.projection == 'ortho':
                 kwargs['lon_0'] = 0.5 * (self.x_min + self.x_max)
                 kwargs['lat_0'] = 0.5 * (self.y_min + self.y_max)
+                proj = Proj(proj='ortho', lon_0=kwargs['lon_0'], lat_0=kwargs['lat_0'])
+
+                kwargs['llcrnrx'], kwargs['llcrnry'] = proj(self.x_min - self.x_offset * (self.x_max - self.x_min),
+                                                            self.y_min - self.y_offset * (self.y_max - self.y_min))
+                kwargs['urcrnrx'], kwargs['urcrnry'] = proj(self.x_max + self.x_offset * (self.x_max - self.x_min),
+                                                            self.y_max + self.y_offset * (self.y_max - self.y_min))
 
             elif self.projection == 'lcc':
                 kwargs['lon_0'] = 0.5 * (self.x_min + self.x_max)
@@ -310,6 +327,12 @@ class Display:
         if self.axes_equal:
             self.map_adjoint.axis('equal')
 
+    def update_bounds(self, bl, tr):
+        self.x_min = bl[0]
+        self.y_min = bl[1]
+        self.x_max = tr[0]
+        self.y_max = tr[1]
+
     def draw_point_by_name(self, name):
         if self.coords != 'gcs':
             print('"draw_point_by_name" only available for GCS coordinates')
@@ -334,7 +357,7 @@ class Display:
         if label is not None:
             self.ax.annotate(label, pos_annot, (10, 10), textcoords='offset pixels', ha='center')
 
-    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=True, autoscale=False, showanchors=False):
+    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=None, autoscale=False, showanchors=False):
         """
         :param filename: Specify filename if different from standard
         :param adjust_map: Adjust map boundaries to the wind
@@ -352,18 +375,16 @@ class Display:
             X[:] = f['grid'][:, :, 0]
             Y[:] = f['grid'][:, :, 1]
             if adjust_map:
-                self.x_min = np.min(X)
-                self.x_max = np.max(X)
-                self.y_min = np.min(Y)
-                self.y_max = np.max(Y)
+                self.update_bounds((np.min(X), np.min(Y)), (np.max(X), np.max(Y)))
                 self.setup_map()
 
             alpha_bg = 1.0
-            try:
-                # True if wind displaystyle is piecewise constant, else smooth
-                wind_nointerp = not f.attrs['analytical']
-            except KeyError:
-                wind_nointerp = True
+            if wind_nointerp is None:
+                try:
+                    # True if wind displaystyle is piecewise constant, else smooth
+                    wind_nointerp = not f.attrs['analytical']
+                except KeyError:
+                    wind_nointerp = True
 
             # Resize window
 
@@ -376,10 +397,9 @@ class Display:
             U = f['data'][0, :, :, 0].flatten()
             V = f['data'][0, :, :, 1].flatten()
 
-
             norms3d = np.sqrt(f['data'][0, :, :, 0] ** 2 + f['data'][0, :, :, 1] ** 2)
             norms = np.sqrt(U ** 2 + V ** 2)
-            eps = (np.max(norms) - np.min(norms))*1e-6
+            eps = (np.max(norms) - np.min(norms)) * 1e-6
             # norms += eps
 
             norm = mpl_colors.Normalize()
@@ -490,8 +510,8 @@ class Display:
         Plots the given trajectory according to selected display mode
         :param nt_tick: Total number of ticking points to display (including start and end)
         """
-        duration = (ts[last_index - 1] - ts[0])
-        self.t_tick = max_time / (nt_tick - 1)
+        # duration = (ts[last_index - 1] - ts[0])
+        # self.t_tick = max_time / (nt_tick - 1)
         if not self.display_setup:
             self.setup()
 
@@ -506,7 +526,7 @@ class Display:
                 p_label = None
 
         ls = linestyle[label % len(linestyle)]
-        kwargs = {'color': reachability_colors[type]['steps'],
+        kwargs = {'color': reachability_colors[type]['steps'] if type != 'path' else path_colors[id % len(path_colors)],
                   'linestyle': ls,
                   'label': p_label,
                   'gid': id,
@@ -516,47 +536,48 @@ class Display:
         self.traj_lines.append(self.ax.plot(points[:last_index - 1, 0], points[:last_index - 1, 1], **kwargs))
 
         # Ticks
-        ticking_points = np.zeros((nt_tick, 2))
-        ticking_controls = np.zeros((nt_tick, 2))
-        nt = ts.shape[0]
-        # delta_t = max_time / (nt - 1)
-        k = 0
-        for j, t in enumerate(ts):
-            if j >= last_index:
-                break
-            # if abs(t - k * t_tick) < 1.05 * (delta_t / 2.):
-            if t - k * self.t_tick > -1e-3:
-                if k >= ticking_points.shape[0]:
-                    # Reallocate ticking points on demand
-                    n_p, n_d = ticking_points.shape
-                    _save = np.zeros((n_p, n_d))
-                    _save[:] = ticking_points
-                    ticking_points = np.zeros((n_p * 10, n_d))
-                    ticking_points[:n_p] = _save[:]
+        if self.t_tick is not None:
+            ticking_points = np.zeros((nt_tick, 2))
+            ticking_controls = np.zeros((nt_tick, 2))
+            nt = ts.shape[0]
+            # delta_t = max_time / (nt - 1)
+            k = 0
+            for j, t in enumerate(ts):
+                if j >= last_index:
+                    break
+                # if abs(t - k * t_tick) < 1.05 * (delta_t / 2.):
+                if t - k * self.t_tick > -1e-3 or j == 0:
+                    if k >= ticking_points.shape[0]:
+                        # Reallocate ticking points on demand
+                        n_p, n_d = ticking_points.shape
+                        _save = np.zeros((n_p, n_d))
+                        _save[:] = ticking_points
+                        ticking_points = np.zeros((n_p * 10, n_d))
+                        ticking_points[:n_p] = _save[:]
 
-                    # Reallocate controls too
-                    n_p, n_d = ticking_controls.shape
-                    _save = np.zeros((n_p, n_d))
-                    _save[:] = ticking_controls
-                    ticking_controls = np.zeros((n_p * 10, n_d))
-                    ticking_controls[:n_p] = _save[:]
+                        # Reallocate controls too
+                        n_p, n_d = ticking_controls.shape
+                        _save = np.zeros((n_p, n_d))
+                        _save[:] = ticking_controls
+                        ticking_controls = np.zeros((n_p * 10, n_d))
+                        ticking_controls[:n_p] = _save[:]
 
-                ticking_points[k, :] = points[j]
+                    ticking_points[k, :] = points[j]
 
-                if self.coords == 'cartesian':
-                    ticking_controls[k] = np.array([cos(controls[j]), sin(controls[j])])
-                elif self.coords == 'gcs':
-                    ticking_controls[k] = np.array([sin(controls[j]), cos(controls[j])])
-                k += 1
-        kwargs = {'s': 5.,
-                  'c': [reachability_colors[type]["time-tick"]],
-                  'marker': 'o',
-                  'linewidths': 1.,
-                  'zorder': ZO_TRAJS}
-        if self.coords == 'gcs':
-            kwargs['latlon'] = True
+                    if self.coords == 'cartesian':
+                        ticking_controls[k] = np.array([cos(controls[j]), sin(controls[j])])
+                    elif self.coords == 'gcs':
+                        ticking_controls[k] = np.array([sin(controls[j]), cos(controls[j])])
+                    k += 1
+            kwargs = {'s': 5.,
+                      'c': [reachability_colors[type]["time-tick"]],
+                      'marker': 'o',
+                      'linewidths': 1.,
+                      'zorder': ZO_TRAJS}
+            if self.coords == 'gcs':
+                kwargs['latlon'] = True
 
-        self.traj_ticks.append(self.ax.scatter(ticking_points[1:k, 0], ticking_points[1:k, 1], **kwargs))
+            self.traj_ticks.append(self.ax.scatter(ticking_points[1:k, 0], ticking_points[1:k, 1], **kwargs))
 
         # Heading vectors
         factor = 1. if self.coords == 'cartesian' else EARTH_RADIUS / 180 * np.pi
@@ -583,7 +604,7 @@ class Display:
 
         # Last points
         kwargs = {'s': 10. if interrupted else 5.,
-                  'c': [reachability_colors[type]["last"]],
+                  'c': [reachability_colors[type]["last"]] if type != 'path' else path_colors[id % len(path_colors)],
                   'marker': (r'x' if interrupted else 'o'),
                   'linewidths': 1.,
                   'zorder': ZO_TRAJS}
@@ -643,7 +664,7 @@ class Display:
                                    id=traj.attrs['label'],
                                    **kwargs)
 
-    def draw_rff(self, filename=None, timeindex=None, debug=False):
+    def draw_rff(self, filename=None, slice=None, debug=False):
         if self.rff_fpath is None:
             filename = self.rff_fname if filename is None else filename
             self.rff_fpath = os.path.join(self.output_dir, filename)
@@ -654,16 +675,43 @@ class Display:
             kwargs = {
                 'zorder': ZO_RFF,
                 'cmap': 'brg',
-                'antialiased': True
+                'antialiased': True,
+                'alpha': .8 if not debug else 0.7
             }
             if self.coords == 'gcs':
                 kwargs['latlon'] = True
-            nt, nx, ny = f['data'].shape
-            ts_list = [timeindex] if timeindex is not None else range(nt)
+            nt, self.nx_rft, self.ny_rft = f['data'].shape
+            self.rff_zero_ceil = min((self.x_max - self.x_min) / (3 * self.nx_rft),
+                                     (self.y_max - self.y_min) / (3 * self.ny_rft))
+            if 'nt_rft_eff' in self.__dict__:
+                nt = self.nt_rft_eff + 1
+            ts_list = range(nt)
+            if slice is not None:
+                ts_list = range(*slice)
+            if debug:
+                fig, ax = plt.subplots()
             for k in ts_list:
+                minabs = np.abs(np.array(f['data'][k, :, :])).min()
+                if np.abs(np.array(f['data'][k, :, :])).min() > self.rff_zero_ceil / 2:
+                    print('Detecting wrong zero_ceil, adjusting automatically')
+                    self.rff_zero_ceil = minabs * 1.1
+                data_max = f['data'][k, :, :].max()
+                data_min = f['data'][k, :, :].min()
+                if debug:
+                    ax.hist(f['data'][k, :, :].reshape(-1), density=True, label=k,
+                            color=path_colors[k % len(path_colors)])
+                zero_ceil = self.rff_zero_ceil  # (data_max - data_min) / 1000.
+                if debug:
+                    print(f'{k}, min : {data_min}, max : {data_max}, zero_ceil : {zero_ceil}')
+                if data_min > zero_ceil or data_max < -zero_ceil:
+                    print(f'[RFF] No RFF value in zero band for index {k}', file=sys.stderr)
                 args = (f['grid'][:, :, 0], f['grid'][:, :, 1], f['data'][k, :, :]) + (
-                    ([-1000., 1000.],) if not debug else ())
+                    ([-zero_ceil/2, zero_ceil/2],) if not debug else ([data_min, 0., data_max],))
+                # ([-1000., 1000.],) if not debug else (np.linspace(-100000, 100000, 200),))
                 self.rff_contours.append(self.ax.contourf(*args, **kwargs))
+            if debug:
+                plt.legend()
+                plt.show()
 
     def draw_solver(self, labeling=True):
         kwargs = {}
@@ -672,17 +720,31 @@ class Display:
             scatterax = self.map
         else:
             scatterax = self.mainax
+        has_opti_ceil = self.opti_ceil is not None
+        if not has_opti_ceil:
+            print('Missing opti_ceil', file=sys.stderr)
         # Init point
-        scatterax.scatter(self.x_init[0], self.x_init[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
-        c = self.map(self.x_init[0], self.x_init[1]) if self.coords == 'gcs' else (self.x_init[0], self.x_init[1])
-        if labeling:
-            self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
+        if self.x_init is not None:
+            scatterax.scatter(self.x_init[0], self.x_init[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
+            c = self.map(self.x_init[0], self.x_init[1]) if self.coords == 'gcs' else (self.x_init[0], self.x_init[1])
+            if labeling:
+                self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
+            if has_opti_ceil:
+                self.mainax.add_patch(plt.Circle(c, self.opti_ceil))
+        else:
+            print('Missing x_init', file=sys.stderr)
         # Target point
-        scatterax.scatter(self.x_target[0], self.x_target[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
-        c = self.map(self.x_target[0], self.x_target[1]) if self.coords == 'gcs' else (self.x_target[0], self.x_target[1])
-        if labeling:
-            self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
-        self.mainax.add_patch(plt.Circle(c, self.opti_ceil))
+        if self.x_target is not None:
+            scatterax.scatter(self.x_target[0], self.x_target[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT,
+                              **kwargs)
+            c = self.map(self.x_target[0], self.x_target[1]) if self.coords == 'gcs' else (
+            self.x_target[0], self.x_target[1])
+            if labeling:
+                self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
+            if has_opti_ceil:
+                self.mainax.add_patch(plt.Circle(c, self.opti_ceil))
+        else:
+            print('Missing x_target', file=sys.stderr)
 
     def load_params(self, fname=None):
         """
@@ -706,6 +768,10 @@ class Display:
         except KeyError:
             pass
         try:
+            self.t_tick = self.max_time / (self.nt_tick - 1)
+        except TypeError:
+            pass
+        try:
             self.x_init = params['point_init']
         except KeyError:
             pass
@@ -716,7 +782,10 @@ class Display:
         try:
             self.opti_ceil = params['target_radius']
         except KeyError:
-            print('Failed to load "target_radius"', file=sys.stderr)
+            print('Failed to load "target_radius", using default value', file=sys.stderr)
+        try:
+            self.nt_rft_eff = params['nt_rft_eff']
+        except KeyError:
             pass
 
     def show_params(self, fname=None):
@@ -729,6 +798,8 @@ class Display:
 
     def set_output_path(self, path):
         self.output_dir = path
+        basename = os.path.basename(path)
+        self.output_imgpath = os.path.join(path, basename + f'.{self.img_params["format"]}')
 
     def set_title(self, title):
         self.title = title
@@ -790,9 +861,9 @@ class Display:
 
     def update_title(self):
         try:
-            fmax_time = f'{self.max_time/3600:.1f}h' if self.max_time > 1800. else f'{self.max_time:.2E}'
+            fmax_time = f'{self.max_time / 3600:.1f}h' if self.max_time > 1800. else f'{self.max_time:.2E}'
             if self.t_tick is not None:
-                ft_tick = f'{self.t_tick/3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
+                ft_tick = f'{self.t_tick / 3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
                 self.title += f' (ticks : {ft_tick})'
             self.mainfig.suptitle(self.title)
         except TypeError:
@@ -801,4 +872,5 @@ class Display:
     def show(self, noparams=False):
         if not noparams:
             self.show_params()
+        self.mainfig.savefig(self.output_imgpath, **self.img_params)
         plt.show()
