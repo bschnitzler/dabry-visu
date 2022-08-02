@@ -3,12 +3,12 @@ import json
 import os
 import sys
 import webbrowser
-
+from datetime import datetime
 import matplotlib.cm as mpl_cm
 import matplotlib.colors as mpl_colors
 import matplotlib.pyplot as plt
 
-from matplotlib.widgets import Button, CheckButtons
+from matplotlib.widgets import Button, CheckButtons, Slider
 from mpl_toolkits.basemap import Basemap
 import h5py
 import scipy.ndimage
@@ -44,6 +44,8 @@ class Display:
 
         self.x_offset = 0.1
         self.y_offset = 0.1
+
+        self.nt_wind = None
 
         # Main figure
         self.mainfig = None
@@ -114,11 +116,29 @@ class Display:
         self.control_button = None
         self.ax_info = None
 
+        self.wind_anchors = None
+        self.wind_colormesh = None
+        self.wind_colorcontour = None
+        self.wind_quiver = None
+        self.ax_timeslider = None
+        self.time_slider = None
+        self.wind_colorbar = None
+
         self.geodata = GeoData()
 
     def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='ortho', debug=False):
 
         self.projection = projection
+
+        try:
+            with open(os.path.join(self.output_dir, self.params_fname), 'r') as f:
+                params = json.load(f)
+                try:
+                    self.nt_wind = params['nt_wind']
+                except KeyError:
+                    pass
+        except FileNotFoundError:
+            pass
 
         if bl is None:
             if self.output_dir is None:
@@ -177,7 +197,6 @@ class Display:
             wspace=0.13
         )
         self.mainfig.suptitle(self.title)
-
         self.mainax = self.mainfig.add_subplot()
 
         if self.mode == "only-map":
@@ -223,6 +242,19 @@ class Display:
         self.control_button.on_clicked(self.toggle_controls)
 
         self.ax_info = self.mainfig.text(0.34, 0.025, ' ')
+
+        if self.nt_wind is not None and self.nt_wind > 1:
+            self.ax_timeslider = self.mainfig.add_axes([0.1, 0.25, 0.0225, 0.63])
+            self.ax_timedisplay = self.mainfig.text(0.34, 0.025, ' ')
+            self.time_slider = Slider(
+                ax=self.ax_timeslider,
+                label="Time",
+                valmin=0,
+                valmax=self.nt_wind - 1,
+                valinit=0,
+                orientation="vertical"
+            )
+            self.time_slider.on_changed(self.reload_wind)
 
     def setup_map(self):
         """
@@ -357,13 +389,13 @@ class Display:
         if label is not None:
             self.ax.annotate(label, pos_annot, (10, 10), textcoords='offset pixels', ha='center')
 
-    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=None, autoscale=False, showanchors=False):
+    def draw_wind(self, ts=0, filename=None, adjust_map=False, wind_nointerp=None, autoscale=False, showanchors=False,
+                  autoquiversample=True):
         """
         :param filename: Specify filename if different from standard
         :param adjust_map: Adjust map boundaries to the wind
         :param wind_nointerp: Draw wind as piecewise constant (pcolormesh plot)
         """
-
         if self.wind_fpath is None:
             filename = self.wind_fname if filename is None else filename
             self.wind_fpath = os.path.join(self.output_dir, filename)
@@ -372,6 +404,8 @@ class Display:
             nt, nx, ny, _ = f['data'].shape
             X = np.zeros((nx, ny))
             Y = np.zeros((nx, ny))
+            if autoquiversample:
+                ur = nx // 40
             X[:] = f['grid'][:, :, 0]
             Y[:] = f['grid'][:, :, 1]
             if adjust_map:
@@ -394,10 +428,16 @@ class Display:
             # cartesian = np.dstack((X, Y)).reshape(-1, 2)
             #
             # uv = np.array(list(map(self.windfield, list(cartesian))))
-            U = f['data'][0, :, :, 0].flatten()
-            V = f['data'][0, :, :, 1].flatten()
+            U_grid = np.zeros((nx, ny))
+            V_grid = np.zeros((nx, ny))
+            k = int(ts)
+            p = ts - k
+            U_grid[:] = (1-p) * f['data'][k, :, :, 0] + p * f['data'][k+1, :, :, 0]
+            V_grid[:] = (1-p) * f['data'][k, :, :, 1] + p * f['data'][k+1, :, :, 1]
+            U = U_grid.flatten()
+            V = V_grid.flatten()
 
-            norms3d = np.sqrt(f['data'][0, :, :, 0] ** 2 + f['data'][0, :, :, 1] ** 2)
+            norms3d = np.sqrt(U_grid ** 2 + V_grid ** 2)
             norms = np.sqrt(U ** 2 + V ** 2)
             eps = (np.max(norms) - np.min(norms)) * 1e-6
             # norms += eps
@@ -413,15 +453,15 @@ class Display:
             sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
 
             if self.coords == 'gcs':
-                cb = self.ax.colorbar(sm)  # , orientation='vertical')
-                cb.set_label('Wind [m/s]')
+                self.wind_colorbar = self.ax.colorbar(sm)  # , orientation='vertical')
+                self.wind_colorbar.set_label('Wind [m/s]')
             elif self.coords == 'cartesian':
-                cb = self.mainfig.colorbar(sm, ax=self.ax)
-                cb.set_label('Wind [m/s]')
+                self.wind_colorbar = self.mainfig.colorbar(sm, ax=self.ax)
+                self.wind_colorbar.set_label('Wind [m/s]')
 
             # Wind anchor plot
             if showanchors:
-                self.ax.scatter(X, Y, zorder=ZO_WIND_ANCHORS)
+                self.wind_anchors = self.ax.scatter(X, Y, zorder=ZO_WIND_ANCHORS)
 
             # Wind norm plot
             # znorms3d = scipy.ndimage.zoom(norms3d, 3)
@@ -435,22 +475,27 @@ class Display:
                 'norm': norm,
                 'alpha': alpha_bg,
                 'zorder': ZO_WIND_NORM,
-                'shading': 'auto',
             }
             if self.coords == 'gcs':
                 kwargs['latlon'] = True
 
             if wind_nointerp:
-                self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
+                kwargs['shading'] = 'auto'
+                self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
             else:
                 znorms3d = scipy.ndimage.zoom(norms3d, 3)
                 zX = scipy.ndimage.zoom(X, 3)
                 zY = scipy.ndimage.zoom(Y, 3)
                 kwargs['antialiased'] = True
                 kwargs['levels'] = 50
-                self.ax.contourf(zX, zY, znorms3d, **kwargs)
+                self.wind_colorcontour = self.ax.contourf(zX, zY, znorms3d, **kwargs)
 
             # Quiver plot
+            qX = X[::ur, ::ur]
+            qY = Y[::ur, ::ur]
+            qU = U_grid[::ur, ::ur].flatten()
+            qV = V_grid[::ur, ::ur].flatten()
+            qnorms = np.sqrt(qU ** 2 + qV ** 2)
             kwargs = {
                 'color': (0.4, 0.4, 0.4, 1.0),
                 'width': 0.001,
@@ -460,19 +505,21 @@ class Display:
             }
             if self.coords == 'gcs':
                 kwargs['latlon'] = True
-            self.ax.quiver(X, Y, U / norms, V / norms, **kwargs)  # color=color)
+            self.wind_quiver = self.ax.quiver(qX, qY, qU / qnorms, qV / qnorms, **kwargs)  # color=color)
 
             # Stream plot
+            """
             kwargs = {'linewidth': 0.3, 'color': (0., 0., 0., alpha_bg)}
             if self.coords == 'cartesian':
-                args = X[:, 0], Y[0, :], (f['data'][0, :, :, 0] / norms3d).transpose(), \
-                       (f['data'][0, :, :, 1] / norms3d).transpose()
+                args = X[:, 0], Y[0, :], (f['data'][ts, :, :, 0] / norms3d).transpose(), \
+                       (f['data'][ts, :, :, 1] / norms3d).transpose()
             elif self.coords == 'gcs':
-                args = X.transpose(), Y.transpose(), (f['data'][0, :, :, 0] / norms3d).transpose(), \
-                       (f['data'][0, :, :, 1] / norms3d).transpose()
+                args = X.transpose(), Y.transpose(), (f['data'][ts, :, :, 0] / norms3d).transpose(), \
+                       (f['data'][ts, :, :, 1] / norms3d).transpose()
                 # args = X.transpose(), Y.transpose(), (f['data'][0, :, :, 0] / norms3d).transpose(), \
                 #        (f['data'][0, :, :, 1] / norms3d).transpose()
                 kwargs['latlon'] = True
+            """
             # self.map.streamplot(*args, **kwargs)  # color=color)
 
             # divider = make_axes_locatable(self.map)
@@ -706,7 +753,7 @@ class Display:
                 if data_min > zero_ceil or data_max < -zero_ceil:
                     print(f'[RFF] No RFF value in zero band for index {k}', file=sys.stderr)
                 args = (f['grid'][:, :, 0], f['grid'][:, :, 1], f['data'][k, :, :]) + (
-                    ([-zero_ceil/2, zero_ceil/2],) if not debug else ([data_min, 0., data_max],))
+                    ([-zero_ceil / 2, zero_ceil / 2],) if not debug else ([data_min, 0., data_max],))
                 # ([-1000., 1000.],) if not debug else (np.linspace(-100000, 100000, 200),))
                 self.rff_contours.append(self.ax.contourf(*args, **kwargs))
             if debug:
@@ -738,7 +785,7 @@ class Display:
             scatterax.scatter(self.x_target[0], self.x_target[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT,
                               **kwargs)
             c = self.map(self.x_target[0], self.x_target[1]) if self.coords == 'gcs' else (
-            self.x_target[0], self.x_target[1])
+                self.x_target[0], self.x_target[1])
             if labeling:
                 self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
             if has_opti_ceil:
@@ -847,6 +894,33 @@ class Display:
         self.mainfig.canvas.draw()  # redraw the figure
         t_end = time.time()
         print(f'Done ({t_end - t_start:.3f}s)')
+
+    def reload_wind(self, val):
+        # for element in [self.wind_colorplot, self.wind_quiver, self.wind_anchors]:
+        #     if element is not None:
+        #         element.remove()
+        if self.wind_colormesh is not None:
+            self.wind_colormesh.remove()
+            self.wind_colormesh = None
+        if self.wind_colorcontour is not None:
+            self.wind_colorcontour.remove()
+            self.wind_colorcontour = None
+        if self.wind_quiver is not None:
+            self.wind_quiver.remove()
+            self.wind_quiver = None
+        if self.wind_anchors is not None:
+            self.wind_anchors.remove()
+            self.wind_anchors = None
+        if self.wind_colorbar is not None:
+            self.wind_colorbar.remove()
+            self.wind_colorbar = None
+        self.draw_wind(ts=val)
+        with h5py.File(self.wind_fpath, 'r') as f:
+            k = int(val)
+            p = val - k
+            ts = (1-p) * f['ts'][k] + p * f['ts'][k+1]
+            d = datetime.fromtimestamp(ts)
+            self.ax_timedisplay.set_text(f'{str(d).split(".")[0]}')
 
     def legend(self):
         self.mainfig.legend()
