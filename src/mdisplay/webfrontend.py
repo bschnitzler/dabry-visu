@@ -27,7 +27,7 @@ class WebFrontend:
         self.display.set_output_path(output_path)
         self.display.nocontrols = True
         self.display.set_title(os.path.basename(output_path))
-        self.display.load_params()
+        self.display.import_params()
         self.display.load_trajs()
         self.display.setup()
         self.display.draw_wind()
