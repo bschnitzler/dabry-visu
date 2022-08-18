@@ -65,6 +65,7 @@ class Display:
         self.title = title
         self.axes_equal = True
         self.projection = projection
+        self.sm = None
 
         self.cm_norm_min = None
         self.cm_norm_max = None
@@ -99,6 +100,14 @@ class Display:
         self.trajs_fpath = None
         self.rff_fpath = None
 
+        self.wind = None
+        self.wind_attrs = None
+        self.wind_grid = None
+        self.wind_ts = None
+        self.time_varying = False
+
+        self.trajs = None
+
         self.traj_artists = []
         self.traj_lines = []
         self.traj_ticks = []
@@ -123,10 +132,15 @@ class Display:
         self.ax_timeslider = None
         self.time_slider = None
         self.wind_colorbar = None
+        self.ax_timedisplay = None
+        self.its = 0  # Currently displayed time step index
+
+        self.color_mode = ''
 
         self.geodata = GeoData()
 
     def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='ortho', debug=False):
+        print('Calling setup')
 
         self.projection = projection
 
@@ -244,6 +258,7 @@ class Display:
         self.ax_info = self.mainfig.text(0.34, 0.025, ' ')
 
         if self.nt_wind is not None and self.nt_wind > 1:
+            self.its = (self.nt_wind - 1) // 2
             self.ax_timeslider = self.mainfig.add_axes([0.1, 0.25, 0.0225, 0.63])
             self.ax_timedisplay = self.mainfig.text(0.34, 0.025, ' ')
             self.time_slider = Slider(
@@ -251,7 +266,7 @@ class Display:
                 label="Time",
                 valmin=0,
                 valmax=self.nt_wind - 1,
-                valinit=0,
+                valinit=self.its,
                 orientation="vertical"
             )
             self.time_slider.on_changed(self.reload_wind)
@@ -389,8 +404,8 @@ class Display:
         if label is not None:
             self.ax.annotate(label, pos_annot, (10, 10), textcoords='offset pixels', ha='center')
 
-    def draw_wind(self, ts=0, filename=None, adjust_map=False, wind_nointerp=None, autoscale=False, showanchors=False,
-                  autoquiversample=True):
+    def draw_wind(self, filename=None, adjust_map=False, wind_nointerp=None, autoscale=False, showanchors=False,
+                  autoquiversample=False):
         """
         :param filename: Specify filename if different from standard
         :param adjust_map: Adjust map boundaries to the wind
@@ -400,136 +415,132 @@ class Display:
             filename = self.wind_fname if filename is None else filename
             self.wind_fpath = os.path.join(self.output_dir, filename)
 
-        with h5py.File(self.wind_fpath, 'r') as f:
-            nt, nx, ny, _ = f['data'].shape
-            X = np.zeros((nx, ny))
-            Y = np.zeros((nx, ny))
-            if autoquiversample:
-                ur = nx // 40
-            X[:] = f['grid'][:, :, 0]
-            Y[:] = f['grid'][:, :, 1]
-            if adjust_map:
-                self.update_bounds((np.min(X), np.min(Y)), (np.max(X), np.max(Y)))
-                self.setup_map()
+        if self.wind is None:
+            with h5py.File(self.wind_fpath, 'r') as f:
+                self.wind = np.zeros(f['data'].shape)
+                self.wind[:] = f['data']
+                self.wind_attrs = {}
+                for k, v in f.attrs.items():
+                    self.wind_attrs[k] = v
+                self.wind_grid = np.zeros(f['grid'].shape)
+                self.wind_grid[:] = f['grid']
+                self.wind_ts = np.zeros(f['ts'].shape)
+                self.wind_ts[:] = f['ts']
+                if self.wind_ts.shape[0] > 1:
+                    self.time_varying = True
 
-            alpha_bg = 1.0
-            if wind_nointerp is None:
-                try:
-                    # True if wind displaystyle is piecewise constant, else smooth
-                    wind_nointerp = not f.attrs['analytical']
-                except KeyError:
-                    wind_nointerp = True
+        nt, nx, ny, _ = self.wind.shape
+        X = np.zeros((nx, ny))
+        Y = np.zeros((nx, ny))
+        if autoquiversample:
+            ur = nx // 40
+        else:
+            ur = 1
+        X[:] = self.wind_grid[:, :, 0]
+        Y[:] = self.wind_grid[:, :, 1]
+        if adjust_map:
+            self.update_bounds((np.min(X), np.min(Y)), (np.max(X), np.max(Y)))
+            self.setup_map()
 
-            # Resize window
+        alpha_bg = 1.0
+        if wind_nointerp is None:
+            try:
+                # True if wind displaystyle is piecewise constant, else smooth
+                wind_nointerp = not self.wind_attrs['analytical']
+            except KeyError:
+                wind_nointerp = True
 
-            # X, Y = np.meshgrid(np.linspace(self.x_min, self.x_max, self.nx_wind),
-            #                    np.linspace(self.y_min, self.y_max, self.ny_wind))
-            #
-            # cartesian = np.dstack((X, Y)).reshape(-1, 2)
-            #
-            # uv = np.array(list(map(self.windfield, list(cartesian))))
-            U_grid = np.zeros((nx, ny))
-            V_grid = np.zeros((nx, ny))
-            k = int(ts)
-            p = ts - k
-            U_grid[:] = (1-p) * f['data'][k, :, :, 0] + p * f['data'][k+1, :, :, 0]
-            V_grid[:] = (1-p) * f['data'][k, :, :, 1] + p * f['data'][k+1, :, :, 1]
-            U = U_grid.flatten()
-            V = V_grid.flatten()
+        # Resize window
 
-            norms3d = np.sqrt(U_grid ** 2 + V_grid ** 2)
-            norms = np.sqrt(U ** 2 + V ** 2)
-            eps = (np.max(norms) - np.min(norms)) * 1e-6
-            # norms += eps
+        # X, Y = np.meshgrid(np.linspace(self.x_min, self.x_max, self.nx_wind),
+        #                    np.linspace(self.y_min, self.y_max, self.ny_wind))
+        #
+        # cartesian = np.dstack((X, Y)).reshape(-1, 2)
+        #
+        # uv = np.array(list(map(self.windfield, list(cartesian))))
+        U_grid = np.zeros((nx, ny))
+        V_grid = np.zeros((nx, ny))
+        if self.nt_wind is None or self.nt_wind == 1:
+            U_grid[:] = self.wind[0, :, :, 0]
+            V_grid[:] = self.wind[0, :, :, 1]
+        else:
+            k = int(self.its)
+            p = self.its - k
+            U_grid[:] = (1 - p) * self.wind[k, :, :, 0] + p * self.wind[k + 1, :, :, 0]
+            V_grid[:] = (1 - p) * self.wind[k, :, :, 1] + p * self.wind[k + 1, :, :, 1]
+        U = U_grid.flatten()
+        V = V_grid.flatten()
 
-            norm = mpl_colors.Normalize()
-            if autoscale:
-                self.cm = 'Blues_r'
-                norm.autoscale(norms)
-            else:
-                self.cm = windy_cm
-                norm.autoscale(np.array([windy_cm.norm_min, windy_cm.norm_max]))
+        norms3d = np.sqrt(U_grid ** 2 + V_grid ** 2)
+        norms = np.sqrt(U ** 2 + V ** 2)
+        eps = (np.max(norms) - np.min(norms)) * 1e-6
+        # norms += eps
 
-            sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
+        norm = mpl_colors.Normalize()
+        if autoscale:
+            self.cm = 'Blues_r'
+            norm.autoscale(norms)
+        else:
+            self.cm = windy_cm
+            norm.autoscale(np.array([windy_cm.norm_min, windy_cm.norm_max]))
+
+        if self.sm is None:
+            self.sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
 
             if self.coords == 'gcs':
-                self.wind_colorbar = self.ax.colorbar(sm)  # , orientation='vertical')
+                self.wind_colorbar = self.ax.colorbar(self.sm)  # , orientation='vertical')
                 self.wind_colorbar.set_label('Wind [m/s]')
             elif self.coords == 'cartesian':
-                self.wind_colorbar = self.mainfig.colorbar(sm, ax=self.ax)
+                self.wind_colorbar = self.mainfig.colorbar(self.sm, ax=self.ax)
                 self.wind_colorbar.set_label('Wind [m/s]')
 
-            # Wind anchor plot
-            if showanchors:
-                self.wind_anchors = self.ax.scatter(X, Y, zorder=ZO_WIND_ANCHORS)
+        # Wind anchor plot
+        if showanchors:
+            self.wind_anchors = self.ax.scatter(X, Y, zorder=ZO_WIND_ANCHORS)
 
-            # Wind norm plot
-            # znorms3d = scipy.ndimage.zoom(norms3d, 3)
-            # zX = scipy.ndimage.zoom(X, 3)
-            # zY = scipy.ndimage.zoom(Y, 3)
-            znorms3d = norms3d
-            zX = X
-            zY = Y
-            kwargs = {
-                'cmap': self.cm,
-                'norm': norm,
-                'alpha': alpha_bg,
-                'zorder': ZO_WIND_NORM,
-            }
-            if self.coords == 'gcs':
-                kwargs['latlon'] = True
+        # Wind norm plot
+        # znorms3d = scipy.ndimage.zoom(norms3d, 3)
+        # zX = scipy.ndimage.zoom(X, 3)
+        # zY = scipy.ndimage.zoom(Y, 3)
+        znorms3d = norms3d
+        zX = X
+        zY = Y
+        kwargs = {
+            'cmap': self.cm,
+            'norm': norm,
+            'alpha': alpha_bg,
+            'zorder': ZO_WIND_NORM,
+        }
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
 
-            if wind_nointerp:
-                kwargs['shading'] = 'auto'
-                self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
-            else:
-                znorms3d = scipy.ndimage.zoom(norms3d, 3)
-                zX = scipy.ndimage.zoom(X, 3)
-                zY = scipy.ndimage.zoom(Y, 3)
-                kwargs['antialiased'] = True
-                kwargs['levels'] = 50
-                self.wind_colorcontour = self.ax.contourf(zX, zY, znorms3d, **kwargs)
+        if wind_nointerp:
+            kwargs['shading'] = 'auto'
+            self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
+        else:
+            znorms3d = scipy.ndimage.zoom(norms3d, 3)
+            zX = scipy.ndimage.zoom(X, 3)
+            zY = scipy.ndimage.zoom(Y, 3)
+            kwargs['antialiased'] = True
+            kwargs['levels'] = 50
+            self.wind_colorcontour = self.ax.contourf(zX, zY, znorms3d, **kwargs)
 
-            # Quiver plot
-            qX = X[::ur, ::ur]
-            qY = Y[::ur, ::ur]
-            qU = U_grid[::ur, ::ur].flatten()
-            qV = V_grid[::ur, ::ur].flatten()
-            qnorms = np.sqrt(qU ** 2 + qV ** 2)
-            kwargs = {
-                'color': (0.4, 0.4, 0.4, 1.0),
-                'width': 0.001,
-                'pivot': 'mid',
-                'alpha': 0.7,
-                'zorder': ZO_WIND_VECTORS
-            }
-            if self.coords == 'gcs':
-                kwargs['latlon'] = True
-            self.wind_quiver = self.ax.quiver(qX, qY, qU / qnorms, qV / qnorms, **kwargs)  # color=color)
-
-            # Stream plot
-            """
-            kwargs = {'linewidth': 0.3, 'color': (0., 0., 0., alpha_bg)}
-            if self.coords == 'cartesian':
-                args = X[:, 0], Y[0, :], (f['data'][ts, :, :, 0] / norms3d).transpose(), \
-                       (f['data'][ts, :, :, 1] / norms3d).transpose()
-            elif self.coords == 'gcs':
-                args = X.transpose(), Y.transpose(), (f['data'][ts, :, :, 0] / norms3d).transpose(), \
-                       (f['data'][ts, :, :, 1] / norms3d).transpose()
-                # args = X.transpose(), Y.transpose(), (f['data'][0, :, :, 0] / norms3d).transpose(), \
-                #        (f['data'][0, :, :, 1] / norms3d).transpose()
-                kwargs['latlon'] = True
-            """
-            # self.map.streamplot(*args, **kwargs)  # color=color)
-
-            # divider = make_axes_locatable(self.map)
-            # cax = divider.append_axes("right", size="5%", pad=0.05)
-
-            # cb = plt.colorbar(sm, ax=[self.map], location='right')
-            # cb = plt.colorbar(sm, cax=cax)
-            # cb.set_label('$|v_w|\;[m/s]$')
-            # cb.ax.semilogy()
-            # cb.ax.yaxis.set_major_formatter(mpl_ticker.LogFormatter())#mpl_ticker.FuncFormatter(lambda s, pos: (np.exp(s*np.log(10)), pos)))
+        # Quiver plot
+        qX = X[::ur, ::ur]
+        qY = Y[::ur, ::ur]
+        qU = U_grid[::ur, ::ur].flatten()
+        qV = V_grid[::ur, ::ur].flatten()
+        qnorms = np.sqrt(qU ** 2 + qV ** 2)
+        kwargs = {
+            'color': (0.4, 0.4, 0.4, 1.0),
+            'width': 0.001,
+            'pivot': 'mid',
+            'alpha': 0.7,
+            'zorder': ZO_WIND_VECTORS
+        }
+        if self.coords == 'gcs':
+            kwargs['latlon'] = True
+        self.wind_quiver = self.ax.quiver(qX, qY, qU / qnorms, qV / qnorms, **kwargs)  # color=color)
 
     # def setup_components(self):
     #     for k, state_plot in enumerate(self.state):
@@ -550,38 +561,63 @@ class Display:
     #         if k == len(self.control) - 1:
     #             control_plot.set_xlabel(r"$t\:[s]$")
 
-    def plot_traj(self, points, controls, ts, type, last_index, interrupted, coords, label=0, color_mode="default",
-                  nt_tick=13,
-                  max_time=None, nolabels=False, id=0, **kwargs):
+    def plot_traj(self, itr, nolabels=False):
         """
         Plots the given trajectory according to selected display mode
-        :param nt_tick: Total number of ticking points to display (including start and end)
         """
         # duration = (ts[last_index - 1] - ts[0])
         # self.t_tick = max_time / (nt_tick - 1)
         if not self.display_setup:
             self.setup()
 
+        points = self.trajs[itr]['data']
+        controls = self.trajs[itr]['controls']
+        ts = self.trajs[itr]['ts']
+        last_index = self.trajs[itr]['last_index']
+        label = self.trajs[itr]['label']
+        idfr = label
+        interrupted = self.trajs[itr]['interrupted']
+        _type = self.trajs[itr]['type']
+
         # Lines
         if nolabels:
             p_label = None
         else:
-            p_label = f'{type} {label}'
+            p_label = f'{_type} {label}'
             if p_label not in self.label_list:
                 self.label_list.append(p_label)
             else:
                 p_label = None
 
+        # Determine range of indexes that can be plotted
+        il = 0
+        iu = last_index - 1
+        if self.time_varying:
+            at_least_one = False
+            for i in range(ts.shape[0]):
+                if ts[i] < self.wind_ts[0]:
+                    il += 1
+                elif ts[i] > self.wind_ts[self.its]:
+                    iu = i - 1
+                    break
+                else:
+                    at_least_one = True
+            if not at_least_one:
+                return
+            if iu <= il:
+                return
+
         ls = linestyle[label % len(linestyle)]
-        kwargs = {'color': reachability_colors[type]['steps'] if type != 'path' else path_colors[id % len(path_colors)],
+        kwargs = {'color': reachability_colors[_type]['steps'] if _type != 'path' else path_colors[idfr % len(path_colors)],
                   'linestyle': ls,
                   'label': p_label,
-                  'gid': id,
+                  'gid': idfr,
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
-        self.traj_lines.append(self.ax.plot(points[:last_index - 1, 0], points[:last_index - 1, 1], **kwargs))
+        self.traj_lines.append(self.ax.plot(points[il:iu - 1, 0], points[il:iu - 1, 1], **kwargs))
 
+        """
         # Ticks
         if self.t_tick is not None:
             ticking_points = np.zeros((nt_tick, 2))
@@ -625,6 +661,7 @@ class Display:
                 kwargs['latlon'] = True
 
             self.traj_ticks.append(self.ax.scatter(ticking_points[1:k, 0], ticking_points[1:k, 1], **kwargs))
+        """
 
         # Heading vectors
         factor = 1. if self.coords == 'cartesian' else EARTH_RADIUS / 180 * np.pi
@@ -643,21 +680,22 @@ class Display:
             kwargs['width'] = 1 / 500
             kwargs['scale'] = 50
 
+        """
         if not self.nocontrols:
             self.traj_controls.append(self.ax.quiver(ticking_points[1:k, 0],
                                                      ticking_points[1:k, 1],
                                                      ticking_controls[1:k, 0],
                                                      ticking_controls[1:k, 1], **kwargs))
-
+        """
         # Last points
         kwargs = {'s': 10. if interrupted else 5.,
-                  'c': [reachability_colors[type]["last"]] if type != 'path' else path_colors[id % len(path_colors)],
+                  'c': [reachability_colors[_type]["last"]] if _type != 'path' else path_colors[idfr % len(path_colors)],
                   'marker': (r'x' if interrupted else 'o'),
                   'linewidths': 1.,
                   'zorder': ZO_TRAJS}
         if self.coords == 'gcs':
             kwargs['latlon'] = True
-        self.traj_lp.append(self.ax.scatter(points[last_index - 1, 0], points[last_index - 1, 1], **kwargs))
+        self.traj_lp.append(self.ax.scatter(points[iu, 0], points[iu, 1], **kwargs))
 
         # if self.mode == "full":
         #     for k in range(points.shape[1]):
@@ -673,43 +711,48 @@ class Display:
         #                                  label=label,
         #                                  marker=None)
 
-    def draw_trajs(self, filename=None, nolabels=False, opti_only=False):
-
+    def load_trajs(self, filename=None):
+        self.trajs = []
         if self.trajs_fpath is None:
             filename = self.trajs_fname if filename is None else filename
             self.trajs_fpath = os.path.join(self.output_dir, filename)
         if not os.path.exists(self.trajs_fpath):
-            print(f'Failed to load trajectories : File not found "{self.trajs_fpath}"', file=sys.stderr)
+            print(f'[Warning] Trajectories not found at "{self.trajs_fpath}"', file=sys.stderr)
             return
         with h5py.File(self.trajs_fpath, 'r') as f:
+            print(len(list(f.values())))
             for k, traj in enumerate(f.values()):
                 if traj.attrs['coords'] != self.coords:
-                    print(f'Warning : traj coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
-                kwargs = {
-                    'color_mode': 'reachability',
-                }
+                    print(
+                        f'[Warning] Traj. coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
+
+                """
                 if self.nt_tick is not None:
                     kwargs['nt_tick'] = self.nt_tick
                 if self.max_time is not None:
                     kwargs['max_time'] = self.max_time
+                """
+                _traj = {}
+                _traj['data'] = np.zeros(traj['data'].shape)
+                _traj['data'][:] = traj['data']
+                _traj['controls'] = np.zeros(traj['controls'].shape)
+                _traj['controls'][:] = traj['controls']
+                _traj['ts'] = np.zeros(traj['ts'].shape)
+                _traj['ts'][:] = traj['ts']
 
-                try:
-                    label = int(traj.attrs['label'])
-                except KeyError:
-                    label = 0
+                _traj['type'] = traj.attrs['type']
+                _traj['last_index'] = traj.attrs['last_index']
+                _traj['interrupted'] = traj.attrs['interrupted']
+                _traj['coords'] = traj.attrs['coords']
+                _traj['label'] = traj.attrs['label']
 
-                if not (opti_only and traj.attrs['type'] not in ['optimal', 'integral']):
-                    self.plot_traj(traj['data'],
-                                   traj['controls'],
-                                   traj['ts'],
-                                   traj.attrs['type'],
-                                   traj.attrs['last_index'],
-                                   traj.attrs['interrupted'],
-                                   traj.attrs['coords'],
-                                   label=label,
-                                   nolabels=nolabels,
-                                   id=traj.attrs['label'],
-                                   **kwargs)
+                self.trajs.append(_traj)
+
+    def draw_trajs(self, nolabels=False, opti_only=False):
+        print(len(self.trajs))
+        for k, traj in enumerate(self.trajs):
+            if not opti_only or traj['type'] in ['optimal', 'integral']:
+                self.plot_traj(k, nolabels=nolabels)
 
     def draw_rff(self, filename=None, slice=None, debug=False):
         if self.rff_fpath is None:
@@ -854,12 +897,15 @@ class Display:
     def set_coords(self, coords):
         self.coords = coords
 
-    def reload(self, event):
+    def reload(self, event, hard=False):
         t_start = time.time()
         print('Reloading... ', end='')
 
         # Reload params
-        self.load_params()
+        if hard:
+            self.load_params()
+            self.trajs = None
+            self.load_trajs()
 
         # Reload trajs
         if len(self.traj_lines) != 0:
@@ -876,10 +922,10 @@ class Display:
             self.traj_ticks = []
             self.traj_lp = []
             self.traj_controls = []
-            self.draw_trajs()
+
+        self.draw_trajs()
 
         # Reload RFFs
-        print(len(self.rff_contours))
         if len(self.rff_contours) != 0:
             for c in self.rff_contours:
                 for coll in c.collections:
@@ -899,6 +945,7 @@ class Display:
         # for element in [self.wind_colorplot, self.wind_quiver, self.wind_anchors]:
         #     if element is not None:
         #         element.remove()
+        self.its = int(val)
         if self.wind_colormesh is not None:
             self.wind_colormesh.remove()
             self.wind_colormesh = None
@@ -914,13 +961,15 @@ class Display:
         if self.wind_colorbar is not None:
             self.wind_colorbar.remove()
             self.wind_colorbar = None
-        self.draw_wind(ts=val)
-        with h5py.File(self.wind_fpath, 'r') as f:
-            k = int(val)
-            p = val - k
-            ts = (1-p) * f['ts'][k] + p * f['ts'][k+1]
-            d = datetime.fromtimestamp(ts)
-            self.ax_timedisplay.set_text(f'{str(d).split(".")[0]}')
+        self.draw_wind()
+        if self.nt_wind is not None and self.nt_wind > 1:
+            with h5py.File(self.wind_fpath, 'r') as f:
+                k = int(val)
+                p = val - k
+                ts = (1 - p) * f['ts'][k] + p * f['ts'][k + 1]
+                d = datetime.fromtimestamp(ts)
+                self.ax_timedisplay.set_text(f'{str(d).split(".")[0]}')
+        self.reload(None)
 
     def legend(self):
         self.mainfig.legend()

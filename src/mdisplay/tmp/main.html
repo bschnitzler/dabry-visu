@@ -1,0 +1,15 @@
+<html>
+<head>
+	<script type="text/javascript" src="/eel.js"></script>
+	<script>
+		async function plot(){
+			let content = await eel.plot()();
+			document.getElementById('plot').src = "index.html";
+			console.log(content)
+		}
+	</script>
+</head>
+<body>
+	<button onclick="plot()">Plot</button><br>
+	<iframe id="plot" src="test.html"/>
+</body>
