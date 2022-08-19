@@ -70,16 +70,13 @@ class Display:
         self.cm_norm_min = None
         self.cm_norm_max = None
 
-        # Time window upper bound for trajectories
-        self.max_time = None
         # Number of expected time major ticks on trajectories
         self.nt_tick = None
         self.t_tick = None
 
-        # Solver settings
-        self.x_init = None
-        self.x_target = None
-        self.opti_ceil = None
+        self.p_names = ['x_init', 'x_target', 'target_radius']
+        # Dictionary reading case parameters
+        self.params = {}
 
         self.output_dir = None
         self.output_imgpath = None
@@ -122,6 +119,8 @@ class Display:
         self.rff_contours = []
 
         self.label_list = []
+        self.scatter_init = None
+        self.scatter_target = None
 
         self.nocontrols = nocontrols
 
@@ -294,7 +293,7 @@ class Display:
     def setup_slider(self):
         self.ax_timeslider = self.mainfig.add_axes([0.03, 0.25, 0.0225, 0.63])
         self.ax_timedisplay = self.mainfig.text(0.03, 0.025, f'')
-        val_init = 0.5
+        val_init = 1.
         self.time_slider = Slider(
             ax=self.ax_timeslider,
             label="Time",
@@ -481,7 +480,10 @@ class Display:
             self.rff_contours = []
 
     def clear_solver(self):
-        pass
+        if self.scatter_init is not None:
+            self.scatter_init.remove()
+        if self.scatter_target is not None:
+            self.scatter_target.remove()
 
     def load_wind(self, filename=None):
         self.wind = None
@@ -523,8 +525,6 @@ class Display:
                 """
                 if self.nt_tick is not None:
                     kwargs['nt_tick'] = self.nt_tick
-                if self.max_time is not None:
-                    kwargs['max_time'] = self.max_time
                 """
                 _traj = {}
                 _traj['data'] = np.zeros(traj['data'].shape)
@@ -620,39 +620,18 @@ class Display:
         """
         fname = self.params_fname if fname is None else fname
         with open(os.path.join(self.output_dir, fname), 'r') as f:
-            params = json.load(f)
+            self.params = json.load(f)
         try:
-            self.coords = params['coords']
+            self.coords = self.params['coords']
         except KeyError:
             pass
-        try:
-            self.nt_tick = params['nt_rft']
-        except KeyError:
-            pass
-        try:
-            self.max_time = params['max_time']
-        except KeyError:
-            pass
-        try:
-            self.t_tick = self.max_time / (self.nt_tick - 1)
-        except TypeError:
-            pass
-        try:
-            self.x_init = params['point_init']
-        except KeyError:
-            pass
-        try:
-            self.x_target = params['point_target']
-        except KeyError:
-            pass
-        try:
-            self.opti_ceil = params['target_radius']
-        except KeyError:
-            print('Failed to load "target_radius", using default value', file=sys.stderr)
-        try:
-            self.nt_rft_eff = params['nt_rft_eff']
-        except KeyError:
-            pass
+
+        missing = set(self.p_names).difference(self.params.keys())
+        # Backward compatibility
+        for a in ['init', 'target']:
+            if f'point_{a}' in self.params.keys():
+                missing.remove(f'x_{a}')
+        Display._info(f'Missing parameters : {tuple(missing)}')
 
     def load_all(self):
         self.load_wind()
@@ -1008,43 +987,64 @@ class Display:
         #                                  marker=None)
 
     def draw_solver(self, labeling=True):
+        self.clear_solver()
         kwargs = {}
+        # Selecting correct plot axis
         if self.coords == 'gcs':
             kwargs['latlon'] = True
             scatterax = self.map
         else:
             scatterax = self.mainax
-        has_opti_ceil = self.opti_ceil is not None
-        if not has_opti_ceil:
-            print('Missing opti_ceil', file=sys.stderr)
+
+        # Fetching parameters
+        target_radius = None
+        try:
+            target_radius = self.params['target_radius']
+        except KeyError:
+            pass
+        x_init = None
+        try:
+            x_init = self.params['x_init']
+        except KeyError:
+            # Backward compatibility
+            try:
+                x_init = self.params['point_init']
+            except KeyError:
+                pass
+        x_target = None
+        try:
+            x_target = self.params['x_target']
+        except KeyError:
+            try:
+                x_target = self.params['point_target']
+            except KeyError:
+                pass
+
         # Init point
-        if self.x_init is not None:
-            scatterax.scatter(self.x_init[0], self.x_init[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT, **kwargs)
-            c = self.map(self.x_init[0], self.x_init[1]) if self.coords == 'gcs' else (self.x_init[0], self.x_init[1])
-            if labeling:
-                self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
-            if has_opti_ceil:
-                self.mainax.add_patch(plt.Circle(c, self.opti_ceil))
-        else:
-            print('Missing x_init', file=sys.stderr)
+        if x_init is not None:
+            self.scatter_init = scatterax.scatter(x_init[0], x_init[1], s=30., color='black', marker='o',
+                                                  zorder=ZO_ANNOT, **kwargs)
+            c = self.map(x_init[0], x_init[1]) if self.coords == 'gcs' else (x_init[0], x_init[1])
+            # if labeling:
+            #     self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
+            # if target_radius is not None:
+            #     self.mainax.add_patch(plt.Circle(c, target_radius))
         # Target point
-        if self.x_target is not None:
-            scatterax.scatter(self.x_target[0], self.x_target[1], s=8., color='blue', marker='D', zorder=ZO_ANNOT,
-                              **kwargs)
-            c = self.map(self.x_target[0], self.x_target[1]) if self.coords == 'gcs' else (
-                self.x_target[0], self.x_target[1])
-            if labeling:
-                self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
-            if has_opti_ceil:
-                self.mainax.add_patch(plt.Circle(c, self.opti_ceil))
-        else:
-            print('Missing x_target', file=sys.stderr)
+        if x_target is not None:
+            self.scatter_target = scatterax.scatter(x_target[0], x_target[1], s=40., color='black', marker='*',
+                                                    zorder=ZO_ANNOT, **kwargs)
+            c = self.map(x_target[0], x_target[1]) if self.coords == 'gcs' else (
+                x_target[0], x_target[1])
+            # if labeling:
+            #     self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
+            # if target_radius is not None:
+            #     self.mainax.add_patch(plt.Circle(c, target_radius))
 
     def draw_all(self):
         self.draw_wind()
         self.draw_trajs()
         self.draw_rff()
-        # self.draw_solver()
+        self.draw_solver()
 
         self.mainfig.canvas.draw()
 
@@ -1100,7 +1100,6 @@ class Display:
 
     def update_title(self):
         try:
-            fmax_time = f'{self.max_time / 3600:.1f}h' if self.max_time > 1800. else f'{self.max_time:.2E}'
             if self.t_tick is not None:
                 ft_tick = f'{self.t_tick / 3600:.1f}h' if self.t_tick > 1800. else f'{self.t_tick:.2E}'
                 self.title += f' (ticks : {ft_tick})'
