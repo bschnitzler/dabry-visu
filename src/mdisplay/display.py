@@ -177,7 +177,6 @@ class Display:
             alpha = 1.
         return i, alpha
 
-
     def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='ortho', debug=False):
         self.projection = projection
         try:
@@ -607,7 +606,7 @@ class Display:
                 data_min = self.rff['data'][k, :, :].min()
 
                 zero_ceil = min((self.rff['grid'][:, :, 0].max() - self.rff['grid'][:, :, 0].min()) / (3 * self.nx_rft),
-                           (self.rff['grid'][:, :, 1].max() - self.rff['grid'][:, :, 1].min()) / (3 * self.ny_rft))
+                                (self.rff['grid'][:, :, 1].max() - self.rff['grid'][:, :, 1].min()) / (3 * self.ny_rft))
                 self.rff_zero_ceils.append(zero_ceil)
 
                 if data_min > zero_ceil or data_max < -zero_ceil:
@@ -844,13 +843,13 @@ class Display:
     #         if k == len(self.control) - 1:
     #             control_plot.set_xlabel(r"$t\:[s]$")
 
-    def draw_trajs(self, nolabels=False, opti_only=False):
+    def draw_trajs(self, nolabels=False, opti_only=False, integr=False):
         self.clear_trajs()
         for k, traj in enumerate(self.trajs):
             if not opti_only or traj['type'] in ['optimal', 'integral']:
-                self.draw_traj(k, nolabels=nolabels)
+                self.draw_traj(k, nolabels=nolabels, integr=integr)
 
-    def draw_traj(self, itr, nolabels=False):
+    def draw_traj(self, itr, nolabels=False, integr=False):
         """
         Plots the given trajectory according to selected display mode
         """
@@ -878,23 +877,33 @@ class Display:
             else:
                 p_label = None
 
-        # Determine range of indexes that can be plotted
-        il = 0
-        iu = last_index - 1
+        if integr:
+            # Determine range of indexes that can be plotted
+            il = 0
+            iu = last_index - 1
 
-        at_least_one = False
-        for i in range(ts.shape[0]):
-            if ts[i] < self.tl:
-                il += 1
-            elif ts[i] > self.tcur:
-                iu = i - 1
-                break
-            else:
-                at_least_one = True
-        if not at_least_one:
-            return
-        if iu <= il:
-            return
+            at_least_one = False
+            for i in range(ts.shape[0]):
+                if ts[i] < self.tl:
+                    il += 1
+                elif ts[i] > self.tcur:
+                    iu = i - 1
+                    break
+                else:
+                    at_least_one = True
+            if not at_least_one:
+                return
+            if iu <= il:
+                return
+        else:
+            i = 0
+            # In this mode, find closest point inferior to time cursor
+            if self.tcur < ts[0] or self.tcur > ts[last_index - 1]:
+                return
+            for i in range(ts.shape[0]):
+                if ts[i] > self.tcur:
+                    break
+            il = iu = i
 
         ls = linestyle[label % len(linestyle)]
         kwargs = {
