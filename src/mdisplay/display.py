@@ -151,16 +151,23 @@ class Display:
 
         self.geodata = GeoData()
 
-    def _index_wind(self):
+    def _index(self, mode):
         """
-        Get nearest lowest index for time discrete grid (wind)
-        :param t: The required time
+        Get nearest lowest index for time discrete grid
+        :param mode: Either 'wind' or 'rff'
         :return: Nearest lowest index for time, coefficient for the linear interpolation
         """
-        nt = self.wind['ts'].shape[0]
-        if self.tcur < self.wind['ts'][0]:
+        ts = None
+        if mode == 'wind':
+            ts = self.wind['ts']
+        elif mode == 'rff':
+            ts = self.rff['ts']
+        else:
+            Display._error(f'Unknown mode "{mode}" for _index')
+        nt = ts.shape[0]
+        if self.tcur < ts[0]:
             return 0, 0.
-        if self.tcur > self.wind['ts'][-1]:
+        if self.tcur > ts[-1]:
             # Freeze wind to last frame
             return nt - 2, 1.
         tau = (self.tcur - self.tl) / (self.tu - self.tl)
@@ -302,7 +309,10 @@ class Display:
             valinit=val_init,
             orientation="vertical"
         )
-        self.reload_time(val_init)
+        try:
+            self.reload_time(val_init)
+        except TypeError:
+            pass
         self.time_slider.on_changed(self.reload_time)
 
     def setup_map(self):
@@ -473,7 +483,6 @@ class Display:
 
     def clear_rff(self):
         if len(self.rff_contours) != 0:
-            print('cleaning fronts')
             for c in self.rff_contours:
                 for coll in c.collections:
                     coll.remove()
@@ -642,7 +651,7 @@ class Display:
         self.tcur = 0.5 * (self.tl + self.tu)
         Display._info(f'Loading ended with {n_trajs} trajs and {n_rffs} RFFs.')
 
-    def draw_rff(self, debug=False):
+    def draw_rff(self, debug=False, interp=True):
         self.clear_rff()
         if self.rff is not None:
             ax = None
@@ -650,41 +659,48 @@ class Display:
                 fig, ax = plt.subplots()
             nt = self.rff['data'].shape[0]
 
-            il = 0
-            iu = nt
-            ts = self.rff['ts']
-            at_least_one = False
-            for i in range(ts.shape[0]):
-                if ts[i] < self.tl:
-                    il += 1
-                elif ts[i] > self.tcur:
-                    iu = i - 1
-                    break
-                else:
-                    at_least_one = True
-            if not at_least_one:
-                return
-            if iu <= il:
-                return
+            if interp == False:
+                il = 0
+                iu = nt
+                ts = self.rff['ts']
+                at_least_one = False
+                for i in range(ts.shape[0]):
+                    if ts[i] < self.tl:
+                        il += 1
+                    elif ts[i] > self.tcur:
+                        iu = i - 1
+                        break
+                    else:
+                        at_least_one = True
+                if not at_least_one:
+                    return
+                if iu <= il:
+                    return
 
-            print(il, iu)
-
-            for k in range(il, iu):
-                data_max = self.rff['data'][k, :, :].max()
-                data_min = self.rff['data'][k, :, :].min()
+                for k in range(il, iu):
+                    data_max = self.rff['data'][k, :, :].max()
+                    data_min = self.rff['data'][k, :, :].min()
+                    if debug:
+                        ax.hist(self.rff['data'][k, :, :].reshape(-1), density=True, label=k,
+                                color=path_colors[k % len(path_colors)])
+                    zero_ceil = self.rff_zero_ceils[k]  # (data_max - data_min) / 1000.
+                    if debug:
+                        print(f'{k}, min : {data_min}, max : {data_max}, zero_ceil : {zero_ceil}')
+                    args = (self.rff['grid'][:, :, 0], self.rff['grid'][:, :, 1], self.rff['data'][k, :, :]) + (
+                        ([-zero_ceil / 2, zero_ceil / 2],) if not debug else ([data_min, 0., data_max],))
+                    # ([-1000., 1000.],) if not debug else (np.linspace(-100000, 100000, 200),))
+                    self.rff_contours.append(self.ax.contourf(*args, **self.rff_cntr_kwargs))
                 if debug:
-                    ax.hist(self.rff['data'][k, :, :].reshape(-1), density=True, label=k,
-                            color=path_colors[k % len(path_colors)])
-                zero_ceil = self.rff_zero_ceils[k]  # (data_max - data_min) / 1000.
-                if debug:
-                    print(f'{k}, min : {data_min}, max : {data_max}, zero_ceil : {zero_ceil}')
-                args = (self.rff['grid'][:, :, 0], self.rff['grid'][:, :, 1], self.rff['data'][k, :, :]) + (
-                    ([-zero_ceil / 2, zero_ceil / 2],) if not debug else ([data_min, 0., data_max],))
+                    ax.legend()
+                    plt.show()
+            else:
+                i, alpha = self._index('rff')
+                rff_values = (1 - alpha) * self.rff['data'][i, :, :] + alpha * self.rff['data'][i + 1, :, :]
+                zero_ceil = (1 - alpha) * self.rff_zero_ceils[i] + alpha * self.rff_zero_ceils[i + 1]
+                args = (self.rff['grid'][:, :, 0], self.rff['grid'][:, :, 1], rff_values) + (
+                    ([-zero_ceil / 2, zero_ceil / 2],))
                 # ([-1000., 1000.],) if not debug else (np.linspace(-100000, 100000, 200),))
                 self.rff_contours.append(self.ax.contourf(*args, **self.rff_cntr_kwargs))
-            if debug:
-                ax.legend()
-                plt.show()
 
     def draw_wind(self, adjust_map=False, wind_nointerp=None, autoscale=False, showanchors=False,
                   autoquiversample=False):
@@ -732,7 +748,7 @@ class Display:
             U_grid[:] = self.wind['data'][0, :, :, 0]
             V_grid[:] = self.wind['data'][0, :, :, 1]
         else:
-            k, p = self._index_wind()
+            k, p = self._index('wind')
             U_grid[:] = (1 - p) * self.wind['data'][k, :, :, 0] + p * self.wind['data'][k + 1, :, :, 0]
             V_grid[:] = (1 - p) * self.wind['data'][k, :, :, 1] + p * self.wind['data'][k + 1, :, :, 1]
         U = U_grid.flatten()
@@ -1120,3 +1136,8 @@ class Display:
     @staticmethod
     def _info(msg):
         print(f'[Info] {msg}')
+
+    @staticmethod
+    def _error(msg):
+        print(f'[Error] {msg}', file=sys.stderr)
+        exit(1)
