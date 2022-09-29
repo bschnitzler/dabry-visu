@@ -103,6 +103,12 @@ class Display:
         self.mode_controls = False
         # Whether to print wind in tiles (False) or by interpolation (True)
         self.mode_wind = False
+        # Whether to display extremal field or not
+        self.mode_ef = True
+        # Whether to display zones where windfield is equal to airspeed
+        self.mode_speed = True
+        # Whether to display trajectories annotation
+        self.mode_annot = False
 
         self.has_display_rff = True
 
@@ -126,6 +132,7 @@ class Display:
         self.traj_lines = []
         self.traj_ticks = []
         self.traj_lp = []
+        self.traj_annot = []
         self.traj_controls = []
         self.id_traj_color = 0
 
@@ -250,18 +257,18 @@ class Display:
 
         self.mainfig = plt.figure(num=f"Navigation problem ({self.coords})",
                                   constrained_layout=False,
-                                  figsize=(12, 8))
+                                  figsize=(13, 8))
         self.mainfig.canvas.mpl_disconnect(self.mainfig.canvas.manager.key_press_handler_id)
         self.mainfig.subplots_adjust(
             top=0.93,
-            bottom=0.17,
-            left=0.15,
-            right=0.93,
+            bottom=0.07,
+            left=0.1,
+            right=0.9,
             hspace=0.155,
             wspace=0.13
         )
         self.mainfig.suptitle(self.title)
-        self.mainax = self.mainfig.add_subplot(box_aspect=1.)
+        self.mainax = self.mainfig.add_subplot(box_aspect=1., anchor='C')
 
         if self.mode == "only-map":
             # gs = GridSpec(1, 1, figure=self.mainfig)
@@ -294,17 +301,17 @@ class Display:
         # self.setup_components()
         self.display_setup = True
 
-        self.ax_rbutton = self.mainfig.add_axes([0.44, 0.025, 0.08, 0.05])
-        self.reload_button = Button(self.ax_rbutton, 'Reload', color='white',
-                                    hovercolor='grey')
-        self.reload_button.label.set_fontsize(self.fsc.button_fontsize)
-        self.reload_button.on_clicked(lambda event: self.reload())
-
-        self.ax_sbutton = self.mainfig.add_axes([0.34, 0.025, 0.08, 0.05])
-        self.switch_button = Button(self.ax_sbutton, 'Switch', color='white',
-                                    hovercolor='grey')
-        self.switch_button.label.set_fontsize(self.fsc.button_fontsize)
-        self.switch_button.on_clicked(lambda event: self.switch_agg())
+        # self.ax_rbutton = self.mainfig.add_axes([0.44, 0.025, 0.08, 0.05])
+        # self.reload_button = Button(self.ax_rbutton, 'Reload', color='white',
+        #                             hovercolor='grey')
+        # self.reload_button.label.set_fontsize(self.fsc.button_fontsize)
+        # self.reload_button.on_clicked(lambda event: self.reload())
+        #
+        # self.ax_sbutton = self.mainfig.add_axes([0.34, 0.025, 0.08, 0.05])
+        # self.switch_button = Button(self.ax_sbutton, 'Switch', color='white',
+        #                             hovercolor='grey')
+        # self.switch_button.label.set_fontsize(self.fsc.button_fontsize)
+        # self.switch_button.on_clicked(lambda event: self.switch_agg())
 
         # self.ax_cbutton = self.mainfig.add_axes([0.54, 0.025, 0.08, 0.05])
         # self.control_button = CheckButtons(self.ax_cbutton, ['Controls'], [False])
@@ -511,12 +518,15 @@ class Display:
                 a.remove()
         for a in self.traj_lp:
             a.remove()
+        for a in self.traj_annot:
+            a.remove()
         for a in self.traj_ticks:
             a.remove()
         for a in self.traj_controls:
             a.remove()
         self.traj_lines = []
         self.traj_ticks = []
+        self.traj_annot = []
         self.traj_lp = []
         self.traj_controls = []
         self.id_traj_color = 0
@@ -879,7 +889,7 @@ class Display:
             self.sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
 
             if self.coords == 'gcs':
-                self.wind_colorbar = self.ax.colorbar(self.sm)  # , orientation='vertical')
+                self.wind_colorbar = self.ax.colorbar(self.sm, pad='5%')  # , orientation='vertical')
                 self.wind_colorbar.set_label('Wind [m/s]')
             elif self.coords == 'cartesian':
                 self.wind_colorbar = self.mainfig.colorbar(self.sm, ax=self.ax)
@@ -922,16 +932,16 @@ class Display:
             self.wind_colorcontour = self.ax.contourf(zX, zY, znorms3d, **kwargs)
 
         # Wind ceil
-        if self.airspeed is not None:
+        if self.airspeed is not None and self.mode_speed:
             if 'shading' in kwargs.keys():
                 del kwargs['shading']
-            znorms3d = scipy.ndimage.zoom(norms3d, 3)
-            zX = scipy.ndimage.zoom(X, 3)
-            zY = scipy.ndimage.zoom(Y, 3)
+            # znorms3d = scipy.ndimage.zoom(norms3d, 3)
+            # zX = scipy.ndimage.zoom(X, 3)
+            # zY = scipy.ndimage.zoom(Y, 3)
             kwargs['antialiased'] = True
             ceil = (self.cm_norm_max - self.cm_norm_min)/100.
             kwargs['levels'] = (self.airspeed - ceil, self.airspeed + ceil)
-            self.wind_ceil = self.ax.contourf(zX, zY, znorms3d, **kwargs)
+            self.wind_ceil = self.ax.contourf(X, Y, norms3d, **kwargs)
 
         # Quiver plot
         qX = X[::ur, ::ur]
@@ -982,8 +992,8 @@ class Display:
                         self.leg_labels.append(traj['info'])
                 except KeyError:
                     pass
-
-        self.draw_ef()
+        if self.mode_ef:
+            self.draw_ef()
 
     def draw_ef(self):
         if not self.mode_aggregated:
@@ -1187,6 +1197,11 @@ class Display:
         scatter = self.ax.scatter(px, py, **kwargs)
         self.traj_lp.append(scatter)
 
+        # Annotation
+        if self.mode_annot:
+            self.traj_annot.append(self.ax.annotate(str(label), xy=(px, py), fontsize='x-small'))
+
+
         # Heading vectors
         factor = 1. if self.coords == 'cartesian' else EARTH_RADIUS
         kwargs = {
@@ -1386,6 +1401,18 @@ class Display:
         self.mode_wind = not self.mode_wind
         self.draw_all()
 
+    def toggle_ef(self):
+        self.mode_ef = not self.mode_ef
+        self.draw_all()
+
+    def toggle_speed(self):
+        self.mode_speed = not self.mode_speed
+        self.draw_all()
+
+    def toggle_annot(self):
+        self.mode_annot = not self.mode_annot
+        self.draw_all()
+
     def update_title(self):
         try:
             if self.t_tick is not None:
@@ -1415,10 +1442,16 @@ class Display:
             self.toggle_controls()
         elif event.key == 'w':
             self.toggle_wind()
+        elif event.key == 'h':
+            self.toggle_ef()
+        elif event.key == 'z':
+            self.toggle_speed()
         elif event.key == 'right':
             self.increment_time()
         elif event.key == 'left':
             self.increment_time(k=-1)
+        elif event.key == 'a':
+            self.toggle_annot()
 
     def show(self, noparams=False):
         if not noparams:

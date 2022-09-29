@@ -68,5 +68,5 @@ class GeoData:
 
 if __name__ == '__main__':
     gd = GeoData()
-    gd.get_coords('Dakar')
-    gd.get_coords('Natal')
+    print(gd.get_coords('Dakar'))
+    print(gd.get_coords('Natal'))
