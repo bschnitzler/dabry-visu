@@ -109,6 +109,12 @@ class Display:
         self.mode_speed = True
         # Whether to display trajectories annotation
         self.mode_annot = False
+        # Whether to display wind colors
+        self.mode_wind_color = True
+        # Whether to display energy as colors
+        self.mode_energy = True
+        # Whether to draw extremal fields or not
+        self.mode_ef_display = True
 
         self.has_display_rff = True
 
@@ -134,6 +140,7 @@ class Display:
         self.traj_lp = []
         self.traj_annot = []
         self.traj_controls = []
+        self.traj_epoints = []
         self.id_traj_color = 0
 
         self.rff_contours = []
@@ -151,6 +158,10 @@ class Display:
         self.ax_info = None
 
         self.has_manual_bbox = False
+
+        self.engy_min = self.engy_max = None
+        self.engy_colorbar = None
+        self.engy_norm = None
 
         self.wind_anchors = None
         self.wind_colormesh = None
@@ -516,6 +527,8 @@ class Display:
         for l in self.traj_lines:
             for a in l:
                 a.remove()
+        for a in self.traj_epoints:
+            a.remove()
         for a in self.traj_lp:
             a.remove()
         for a in self.traj_annot:
@@ -525,6 +538,7 @@ class Display:
         for a in self.traj_controls:
             a.remove()
         self.traj_lines = []
+        self.traj_epoints = []
         self.traj_ticks = []
         self.traj_annot = []
         self.traj_lp = []
@@ -574,6 +588,7 @@ class Display:
             self.trajs_fpath = os.path.join(self.output_dir, filename)
         if not os.path.exists(self.trajs_fpath):
             return
+
         with h5py.File(self.trajs_fpath, 'r') as f:
             for k, traj in enumerate(f.values()):
                 if traj.attrs['coords'] != self.coords:
@@ -592,12 +607,29 @@ class Display:
                 _traj['ts'] = np.zeros(traj['ts'].shape)
                 _traj['ts'][:] = traj['ts']
 
+                # if 'airspeed' in traj.keys():
+                #     _traj['airspeed'] = np.zeros(traj['airspeed'].shape)
+                #     _traj['airspeed'][:] = traj['airspeed']
+
+                if 'energy' in traj.keys():
+                    _traj['energy'] = np.zeros(traj['energy'].shape)
+                    _traj['energy'][:] = traj['energy']
+                    cmin = _traj['energy'][:].min()
+                    cmax = _traj['energy'][:].max()
+                    if self.engy_min is None or cmin < self.engy_min:
+                        self.engy_min = cmin
+                    if self.engy_max is None or cmax > self.engy_max:
+                        self.engy_max = cmax
+
                 _traj['type'] = traj.attrs['type']
                 li = _traj['last_index'] = traj.attrs['last_index']
                 _traj['interrupted'] = traj.attrs['interrupted']
                 _traj['coords'] = traj.attrs['coords']
                 _traj['label'] = traj.attrs['label']
                 _traj['info'] = traj.attrs['info']
+                if 'rft' in _traj['info'].lower() or 'htarget' in _traj['info'].lower() \
+                        or 'extremals10' in _traj['info'].lower():
+                    continue
 
                 # Label trajectories belonging to extremal fields
                 if _traj['info'].startswith('ef'):
@@ -617,6 +649,9 @@ class Display:
                     self.tu = tu
 
                 self.trajs.append(_traj)
+        # self.engy_min = 0.
+        # self.engy_max = 16 * 3.6e6
+        self.engy_norm = mpl_colors.Normalize(vmin=self.engy_min, vmax=self.engy_max)
 
     def load_rff(self, filename=None):
         self.rff = None
@@ -892,6 +927,13 @@ class Display:
                 self.wind_colorbar = self.ax.colorbar(self.sm, pad='5%')  # , orientation='vertical')
                 self.wind_colorbar.set_label('Wind [m/s]')
             elif self.coords == 'cartesian':
+                if self.mode_energy:
+                    self.engy_colorbar = self.mainfig.colorbar(mpl_cm.ScalarMappable(cmap='tab20b',
+                                                                                     norm=mpl_colors.Normalize(
+                                                                                         vmin=self.engy_min / 3.6e6,
+                                                                                         vmax=self.engy_max / 3.6e6)),
+                                                               ax=self.ax)
+                    self.engy_colorbar.set_label('Energy [kWh]')
                 self.wind_colorbar = self.mainfig.colorbar(self.sm, ax=self.ax)
                 self.wind_colorbar.set_label('Wind [m/s]')
             if self.airspeed is not None:
@@ -939,7 +981,7 @@ class Display:
             # zX = scipy.ndimage.zoom(X, 3)
             # zY = scipy.ndimage.zoom(Y, 3)
             kwargs['antialiased'] = True
-            ceil = (self.cm_norm_max - self.cm_norm_min)/100.
+            ceil = (self.cm_norm_max - self.cm_norm_min) / 100.
             kwargs['levels'] = (self.airspeed - ceil, self.airspeed + ceil)
             self.wind_ceil = self.ax.contourf(X, Y, norms3d, **kwargs)
 
@@ -1055,6 +1097,15 @@ class Display:
         except KeyError:
             info = ''
 
+        annot_label = None
+        if info.startswith('ef_'):
+            try:
+                annot_label = info.split('_')[2]
+            except IndexError:
+                pass
+        if annot_label is None:
+            annot_label = 'l' + str(label)
+
         # Lines
         if nolabels:
             p_label = None
@@ -1116,6 +1167,7 @@ class Display:
 
         ls = linestyle[label % len(linestyle)]
 
+
         kwargs = {
             'color': color['steps'],
             'linestyle': ls,
@@ -1132,7 +1184,15 @@ class Display:
             kwargs['latlon'] = True
             px[:] = RAD_TO_DEG * px
             py[:] = RAD_TO_DEG * py
-        self.traj_lines.append(self.ax.plot(px, py, **kwargs))
+
+        if ef_id is None or self.mode_ef_display:
+            self.traj_lines.append(self.ax.plot(px, py, **kwargs))
+
+        if self.mode_energy:
+            if 'energy' in trajs[itr].keys():
+                c = trajs[itr]['energy'][il:iu]
+                # norm = mpl_colors.Normalize(vmin=3.6e6, vmax=10*3.6e6)
+                self.traj_epoints.append(self.ax.scatter(px[:-1], py[:-1], c=c, cmap='tab20b', norm=self.engy_norm))
 
         """
         # Ticks
@@ -1199,8 +1259,7 @@ class Display:
 
         # Annotation
         if self.mode_annot:
-            self.traj_annot.append(self.ax.annotate(str(label), xy=(px, py), fontsize='x-small'))
-
+            self.traj_annot.append(self.ax.annotate(str(annot_label), xy=(px, py), fontsize='x-small'))
 
         # Heading vectors
         factor = 1. if self.coords == 'cartesian' else EARTH_RADIUS
@@ -1215,7 +1274,7 @@ class Display:
             kwargs['width'] = 1 / 500  # factor ** 2 / 1000000
             kwargs['scale'] = 50
             # kwargs['scale'] = 1 / factor
-            #kwargs['units'] = 'xy'
+            # kwargs['units'] = 'xy'
         elif self.coords == 'cartesian':
             kwargs['width'] = 1 / 500
             kwargs['scale'] = 50
@@ -1413,6 +1472,22 @@ class Display:
         self.mode_annot = not self.mode_annot
         self.draw_all()
 
+    def toggle_wind_colors(self):
+        self.mode_wind_color = not self.mode_wind_color
+        if self.mode_wind_color:
+            self.selected_cm = custom_cm
+        else:
+            self.selected_cm = custom_desat_cm
+        self.draw_all()
+
+    def toggle_energy(self):
+        self.mode_energy = not self.mode_energy
+        self.draw_all()
+
+    def toggle_ef_display(self):
+        self.mode_ef_display = not self.mode_ef_display
+        self.draw_all()
+
     def update_title(self):
         try:
             if self.t_tick is not None:
@@ -1452,14 +1527,20 @@ class Display:
             self.increment_time(k=-1)
         elif event.key == 'a':
             self.toggle_annot()
+        elif event.key == 'l':
+            self.toggle_wind_colors()
+        elif event.key == 'e':
+            self.toggle_energy()
+        elif event.key == 'x':
+            self.toggle_ef_display()
 
-    def show(self, noparams=False):
+    def show(self, noparams=False, block=False):
         if not noparams:
             self.show_params()
         self.mainfig.savefig(self.output_imgpath, **self.img_params)
 
         self.mainfig.canvas.mpl_connect('key_press_event', self.keyboard)
-        plt.show()
+        plt.show(block=block)
 
     @staticmethod
     def _warn(msg):

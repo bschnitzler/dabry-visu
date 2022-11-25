@@ -188,6 +188,18 @@ def middle(x1, x2):
            atan2(np.sin(x1[1]) + np.sin(x2[1]), np.sqrt((np.cos(x1[1]) + bx) ** 2 + by ** 2))
 
 
+def desaturate(c):
+    N, _ = c.shape
+    res = np.ones((N, 4))
+    for i in range(N):
+        rgb = c[i][:3]
+        alpha = c[i][3]
+        hls = colorsys.rgb_to_hls(*rgb)
+        new_rgb = colorsys.hls_to_rgb(hls[0], hls[1], 0)
+        res[i, :] = new_rgb + (alpha,)
+    return res
+
+
 newcolors = np.array(lighten(cm_values[0][1]))
 for ii in range(1, len(cm_values)):
     j_min = 10 * cm_values[ii - 1][0]
@@ -205,16 +217,16 @@ colors21 = plt.cm.Blues_r(np.linspace(0, 1, 128))
 colors22 = plt.cm.CMRmap(np.linspace(0, 0.9, 128))
 
 # Uniform blending
-#colors2 = np.column_stack((np.einsum('ij,i->ij', (colors21 + colors22)[:, :3],(1. / np.linalg.norm((colors21 + colors22)[:, :3], axis=1))), np.ones(128)))
+# colors2 = np.column_stack((np.einsum('ij,i->ij', (colors21 + colors22)[:, :3],(1. / np.linalg.norm((colors21 + colors22)[:, :3], axis=1))), np.ones(128)))
 
 alpha = np.linspace(0, 1, 128)
 colors2 = (np.einsum('ij, i->ij', colors21, 1 - alpha) + np.einsum('ij, i->ij', colors22, alpha))
 
-#colors2 = colors21
+# colors2 = colors21
 
 # combine them and build a new colormap
 colors = np.vstack((colors1, colors2))
 colors[:, 3] = np.ones(colors.shape[0])
 custom_cm = mpl_colors.LinearSegmentedColormap.from_list('custom', colors)
 
-
+custom_desat_cm = mpl_colors.LinearSegmentedColormap.from_list('custom_desat', desaturate(colors))
