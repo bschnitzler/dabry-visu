@@ -7,6 +7,7 @@ from datetime import datetime
 import matplotlib.cm as mpl_cm
 import matplotlib.colors as mpl_colors
 import matplotlib.pyplot as plt
+import tqdm
 
 from matplotlib.widgets import Button, CheckButtons, Slider
 from mpl_toolkits.basemap import Basemap
@@ -74,6 +75,9 @@ class Display:
         self.leg = None
         self.leg_handles = []
         self.leg_labels = []
+
+        self.bl_man = None
+        self.tr_man = None
 
         # Number of expected time major ticks on trajectories
         self.nt_tick = None
@@ -225,22 +229,22 @@ class Display:
             alpha = 1.
         return i, alpha
 
-    def setup(self, bl=None, tr=None, bl_off=None, tr_off=None, projection='ortho', debug=False):
+    def setup(self, bl_off=None, tr_off=None, projection='ortho', debug=False):
         self.projection = projection
 
-        if bl is not None:
+        if self.bl_man is not None:
             self.has_manual_bbox = True
-            if type(bl) == str:
-                self.x_min, self.y_min = self.geodata.get_coords(bl, units='rad')
+            if type(self.bl_man) == str:
+                self.x_min, self.y_min = self.geodata.get_coords(self.bl_man, units='rad')
             else:
-                self.x_min = bl[0]
-                self.y_min = bl[1]
+                self.x_min = self.bl_man[0]
+                self.y_min = self.bl_man[1]
 
-            if type(tr) == str:
-                self.x_max, self.y_max = self.geodata.get_coords(tr, units='rad')
+            if type(self.tr_man) == str:
+                self.x_max, self.y_max = self.geodata.get_coords(self.tr_man, units='rad')
             else:
-                self.x_max = tr[0]
-                self.y_max = tr[1]
+                self.x_max = self.tr_man[0]
+                self.y_max = self.tr_man[1]
         else:
             self.set_wind_bounds()
 
@@ -626,7 +630,11 @@ class Display:
                 _traj['interrupted'] = traj.attrs['interrupted']
                 _traj['coords'] = traj.attrs['coords']
                 _traj['label'] = traj.attrs['label']
-                _traj['info'] = traj.attrs['info']
+                # Backward compatibility
+                if 'info' in traj.attrs.keys():
+                    _traj['info'] = traj.attrs['info']
+                else:
+                    _traj['info'] = ''
                 if 'rft' in _traj['info'].lower() or 'htarget' in _traj['info'].lower() \
                         or 'extremals10' in _traj['info'].lower():
                     continue
@@ -738,6 +746,16 @@ class Display:
                 success = True
             except KeyError:
                 pass
+            try:
+                self.bl_man = np.array(self.params['bl_pb'])
+                success = True
+            except KeyError:
+                pass
+            try:
+                self.tr_man = np.array(self.params['tr_pb'])
+                success = True
+            except KeyError:
+                pass
         if not success:
             # Try to recover coords from present data
             noted_coords = set()
@@ -773,6 +791,8 @@ class Display:
         if self.airspeed is not None:
             self.cm_norm_min = 0.
             self.cm_norm_max = 2 * self.airspeed
+
+
 
         if len(missing) > 0:
             Display._info(f'Missing parameters : {tuple(missing)}')
@@ -890,7 +910,7 @@ class Display:
         X = np.zeros((nx, ny))
         Y = np.zeros((nx, ny))
         if not no_autoquiver:
-            ur = nx // 30
+            ur = nx // 40
         else:
             ur = 1
         factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
@@ -1165,8 +1185,7 @@ class Display:
             color['last'] = color['steps'] = path_colors[self.id_traj_color % len(path_colors)]
             self.id_traj_color += 1
 
-        ls = linestyle[label % len(linestyle)]
-
+        ls = 'solid' if 'm1' not in info else '--' #linestyle[label % len(linestyle)]
 
         kwargs = {
             'color': color['steps'],
@@ -1541,6 +1560,32 @@ class Display:
 
         self.mainfig.canvas.mpl_connect('key_press_event', self.keyboard)
         plt.show(block=block)
+
+    def to_movie(self, N_frames=50, fps=10):
+        self.toggle_wind()
+        self._info('Rendering animation')
+        anim_path = os.path.join(self.output_dir, 'anim')
+        if not os.path.exists(anim_path):
+            os.mkdir(anim_path)
+        else:
+            for filename in os.listdir(anim_path):
+                os.remove(os.path.join(anim_path, filename))
+        for i in tqdm.tqdm(range(N_frames)):
+            self.reload_time(i / (N_frames - 1))
+            self.mainfig.savefig(os.path.join(anim_path, f'test_{i:0>4}.png'))
+
+        command = \
+            f"""
+        ffmpeg -y -framerate 10 -pattern_type glob \
+        -i '{os.path.join(anim_path, '*.png')}'\
+        '{os.path.join(self.output_dir, 'anim.mp4')}'
+        """
+        #-c: v libx264 - pix_fmt yuv420p
+        os.system(command)
+        for filename in os.listdir(anim_path):
+            if filename.endswith('.png'):
+                os.remove(os.path.join(anim_path, filename))
+        os.rmdir(anim_path)
 
     @staticmethod
     def _warn(msg):
