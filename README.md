@@ -24,4 +24,4 @@ before)
 
 Previews of the tool
 
-![](https://giphy.com/gifs/christmas-santa-see-you-at-Kcg05wnuslB8oj6Kir)
+![](https://github.com/bschnitzler/mdisplay/blob/main/res/eft.gif)
