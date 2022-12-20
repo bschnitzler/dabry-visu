@@ -19,3 +19,9 @@ problems.
 1) Write the path to the `mermoz` module in the `MERMOZ_PATH` file.
 2) Run the bash script `run.sh` (you may need to make it executable
 before)
+
+### Examples
+
+Previews of the tool
+
+![](https://giphy.com/gifs/christmas-santa-see-you-at-Kcg05wnuslB8oj6Kir)

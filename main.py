@@ -26,7 +26,7 @@ if __name__ == '__main__':
 
     fh = FrontendHandler()
     fh.setup()
-    fh.select_example(select_latest=args.latest)
+    fh.select_example(select_latest=args.latest, select_last=args.last)
     fh.run_frontend(block=not args.postprocessing,
                     movie=args.movie,
                     frames=args.frames,

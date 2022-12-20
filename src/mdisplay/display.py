@@ -950,10 +950,11 @@ class Display:
         set_engycb = needs_engy and self.active_windcb
         if self.sm_wind is None:
             self.sm_wind = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
-            self.sm_engy = mpl_cm.ScalarMappable(cmap='tab20b',
-                                                 norm=mpl_colors.Normalize(
-                                                     vmin=self.engy_min / 3.6e6,
-                                                     vmax=self.engy_max / 3.6e6))
+            if self.engy_min and self.engy_max is not None:
+                self.sm_engy = mpl_cm.ScalarMappable(cmap='tab20b',
+                                                     norm=mpl_colors.Normalize(
+                                                         vmin=self.engy_min / 3.6e6,
+                                                         vmax=self.engy_max / 3.6e6))
             if self.coords == 'gcs':
                 self.wind_colorbar = self.ax.colorbar(self.sm_wind, ax=self.ax, pad=0.03)
             elif self.coords == 'cartesian':
@@ -966,7 +967,7 @@ class Display:
             self.wind_colorbar.update_normal(self.sm_wind)
             self.wind_colorbar.set_label('Wind [m/s]')
             self.active_windcb = True
-        if set_engycb:
+        elif set_engycb and self.sm_engy is not None:
             self.wind_colorbar.update_normal(self.sm_engy)
             self.wind_colorbar.set_label('Energy [kWh]')
             self.active_windcb = False
@@ -1460,8 +1461,8 @@ class Display:
     def reload_time(self, val):
         self.tcur = self.tl + val * (self.tu - self.tl)
         noyear = False
-        if self.tcur < 200000:
-            # Posix time less than 10 days after 1970-01-01 so
+        if self.tcur < 2000000:
+            # Posix time less than 100 days after 1970-01-01 so
             # date does not refer to real time
             noyear = True
         try:
@@ -1592,6 +1593,8 @@ class Display:
             self.mode_wind = True
         if 't' in flags:
             self.toggle_rff()
+        if 'h' in flags:
+            self.mode_ef = False
 
     def to_movie(self, frames=50, fps=10):
         self._info('Rendering animation')
@@ -1602,15 +1605,14 @@ class Display:
             for filename in os.listdir(anim_path):
                 os.remove(os.path.join(anim_path, filename))
         for i in tqdm.tqdm(range(frames)):
-            self.reload_time(i / (frames - 1))
+            val = i / (frames - 1)
+            self.time_slider.set_val(val)
+            self.reload_time(val)
             self.mainfig.savefig(os.path.join(anim_path, f'test_{i:0>4}.png'))
 
-        command = \
-            f"""
-        ffmpeg -y -framerate {fps} -pattern_type glob \
-        -i '{os.path.join(anim_path, '*.png')}'\
-        '{os.path.join(self.output_dir, 'anim.mp4')}'
-        """
+        pattern_in = os.path.join(anim_path, '*.png')
+        file_out = os.path.join(self.output_dir, 'anim.mp4')
+        command = f"ffmpeg -y -framerate {fps} -pattern_type glob -i '{pattern_in}' '{file_out}'"
         # -c: v libx264 - pix_fmt yuv420p
         os.system(command)
         for filename in os.listdir(anim_path):
