@@ -610,6 +610,8 @@ class Display:
                 _traj['controls'][:] = traj['controls']
                 _traj['ts'] = np.zeros(traj['ts'].shape)
                 _traj['ts'][:] = traj['ts']
+                if _traj['ts'].shape[0] == 0:
+                    continue
 
                 # if 'airspeed' in traj.keys():
                 #     _traj['airspeed'] = np.zeros(traj['airspeed'].shape)
@@ -635,9 +637,6 @@ class Display:
                     _traj['info'] = traj.attrs['info']
                 else:
                     _traj['info'] = ''
-                if 'rft' in _traj['info'].lower() or 'htarget' in _traj['info'].lower() \
-                        or 'extremals10' in _traj['info'].lower():
-                    continue
 
                 # Label trajectories belonging to extremal fields
                 if _traj['info'].startswith('ef'):
@@ -791,8 +790,6 @@ class Display:
         if self.airspeed is not None:
             self.cm_norm_min = 0.
             self.cm_norm_max = 2 * self.airspeed
-
-
 
         if len(missing) > 0:
             Display._info(f'Missing parameters : {tuple(missing)}')
@@ -1185,7 +1182,7 @@ class Display:
             color['last'] = color['steps'] = path_colors[self.id_traj_color % len(path_colors)]
             self.id_traj_color += 1
 
-        ls = 'solid' if 'm1' not in info else '--' #linestyle[label % len(linestyle)]
+        ls = 'solid' if 'm1' not in info else '--'  # linestyle[label % len(linestyle)]
 
         kwargs = {
             'color': color['steps'],
@@ -1211,7 +1208,8 @@ class Display:
             if 'energy' in trajs[itr].keys():
                 c = trajs[itr]['energy'][il:iu]
                 # norm = mpl_colors.Normalize(vmin=3.6e6, vmax=10*3.6e6)
-                self.traj_epoints.append(self.ax.scatter(px[:-1], py[:-1], c=c, cmap='tab20b', norm=self.engy_norm))
+                self.traj_epoints.append(
+                    self.ax.scatter(px[:-1][::-1], py[:-1][::-1], c=c[::-1], cmap='tab20b', norm=self.engy_norm))
 
         """
         # Ticks
@@ -1431,8 +1429,6 @@ class Display:
         print(f'Done ({t_end - t_start:.3f}s)')
 
     def switch_agg(self):
-        if not self.mode_aggregated:
-            return
         if len(self.ef_agg_display) > 0:
             for ef_id, b in self.ef_agg_display.items():
                 if b:
@@ -1561,8 +1557,21 @@ class Display:
         self.mainfig.canvas.mpl_connect('key_press_event', self.keyboard)
         plt.show(block=block)
 
+    def set_mode(self, flags):
+        if flags is None:
+            return
+        if 's' in flags:
+            self.switch_agg()
+        if 'a' in flags:
+            self.mode_aggregated = 1
+        if 'A' in flags:
+            self.mode_aggregated = 2
+        if 'w' in flags:
+            self.mode_wind = True
+        if 't' in flags:
+            self.toggle_rff()
+
     def to_movie(self, N_frames=50, fps=10):
-        self.toggle_wind()
         self._info('Rendering animation')
         anim_path = os.path.join(self.output_dir, 'anim')
         if not os.path.exists(anim_path):
@@ -1580,7 +1589,7 @@ class Display:
         -i '{os.path.join(anim_path, '*.png')}'\
         '{os.path.join(self.output_dir, 'anim.mp4')}'
         """
-        #-c: v libx264 - pix_fmt yuv420p
+        # -c: v libx264 - pix_fmt yuv420p
         os.system(command)
         for filename in os.listdir(anim_path):
             if filename.endswith('.png'):
