@@ -41,6 +41,7 @@ class WebFrontend:
         eel.init(self.tmp_path)
         eel.start(self.html_srcfile, mode='mozilla')
 
+
 if __name__ == '__main__':
     wf = WebFrontend()
     wf.run()

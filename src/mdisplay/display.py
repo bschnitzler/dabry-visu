@@ -4,6 +4,8 @@ import os
 import sys
 import webbrowser
 from datetime import datetime
+
+import matplotlib
 import matplotlib.cm as mpl_cm
 import matplotlib.colors as mpl_colors
 import matplotlib.pyplot as plt
@@ -44,8 +46,8 @@ class Display:
         self.y_min = None
         self.y_max = None
 
-        self.x_offset = 0.05
-        self.y_offset = 0.05
+        self.x_offset = 0.
+        self.y_offset = 0.
 
         # Main figure
         self.mainfig = None
@@ -71,7 +73,8 @@ class Display:
         self.title = title
         self.axes_equal = True
         self.projection = projection
-        self.sm = None
+        self.sm_wind = None
+        self.sm_engy = None
         self.leg = None
         self.leg_handles = []
         self.leg_labels = []
@@ -120,6 +123,9 @@ class Display:
         # Whether to draw extremal fields or not
         self.mode_ef_display = True
 
+        # True if wind norm colobar is displayed, False if energy colorbar is displayed
+        self.active_windcb = True
+
         self.has_display_rff = True
 
         self.wind = None
@@ -164,7 +170,6 @@ class Display:
         self.has_manual_bbox = False
 
         self.engy_min = self.engy_max = None
-        self.engy_colorbar = None
         self.engy_norm = None
 
         self.wind_anchors = None
@@ -272,13 +277,13 @@ class Display:
 
         self.mainfig = plt.figure(num=f"Navigation problem ({self.coords})",
                                   constrained_layout=False,
-                                  figsize=(13, 8))
+                                  figsize=(12, 8))
         self.mainfig.canvas.mpl_disconnect(self.mainfig.canvas.manager.key_press_handler_id)
         self.mainfig.subplots_adjust(
             top=0.93,
-            bottom=0.07,
+            bottom=0.11,
             left=0.1,
-            right=0.9,
+            right=0.85,
             hspace=0.155,
             wspace=0.13
         )
@@ -342,8 +347,8 @@ class Display:
 
     def setup_slider(self):
         self.ax_timeslider = self.mainfig.add_axes([0.03, 0.25, 0.0225, 0.63])
-        self.ax_timedisplay = self.mainfig.text(0.03, 0.025, f'')
-        self.ax_timedisp_minor = self.mainfig.text(0.03, 0.012, f'', fontsize=self.fsc.timedisp_minor)
+        self.ax_timedisplay = self.mainfig.text(0.03, 0.04, f'', fontsize=self.fsc.timedisp_major)
+        self.ax_timedisp_minor = self.mainfig.text(0.03, 0.018, f'', fontsize=self.fsc.timedisp_minor)
         val_init = 1.
         self.time_slider = Slider(
             ax=self.ax_timeslider,
@@ -450,6 +455,10 @@ class Display:
             self.mainax.set_ylabel('$y$ [m]')
             self.mainax.grid(visible=True, linestyle='-.', linewidth=0.5)
             self.mainax.tick_params(direction='in')
+            formatter = matplotlib.ticker.ScalarFormatter(useMathText=True)
+            formatter.set_powerlimits([-3, 4])
+            self.mainax.xaxis.set_major_formatter(formatter)
+            self.mainax.yaxis.set_major_formatter(formatter)
 
         if cartesian:
             self.ax = self.mainax
@@ -907,7 +916,7 @@ class Display:
         X = np.zeros((nx, ny))
         Y = np.zeros((nx, ny))
         if not no_autoquiver:
-            ur = nx // 40
+            ur = nx // 25
         else:
             ur = 1
         factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
@@ -937,26 +946,30 @@ class Display:
         self.cm = self.selected_cm
         norm.autoscale(np.array([self.cm_norm_min, self.cm_norm_max]))
 
-        if self.sm is None:
-            self.sm = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
-
+        needs_engy = self.mode_energy and self.mode_ef and self.mode_aggregated
+        set_engycb = needs_engy and self.active_windcb
+        if self.sm_wind is None:
+            self.sm_wind = mpl_cm.ScalarMappable(cmap=self.cm, norm=norm)
+            self.sm_engy = mpl_cm.ScalarMappable(cmap='tab20b',
+                                                 norm=mpl_colors.Normalize(
+                                                     vmin=self.engy_min / 3.6e6,
+                                                     vmax=self.engy_max / 3.6e6))
             if self.coords == 'gcs':
-                self.wind_colorbar = self.ax.colorbar(self.sm, pad='5%')  # , orientation='vertical')
-                self.wind_colorbar.set_label('Wind [m/s]')
+                self.wind_colorbar = self.ax.colorbar(self.sm_wind, ax=self.ax, pad=0.03)
             elif self.coords == 'cartesian':
-                if self.mode_energy:
-                    self.engy_colorbar = self.mainfig.colorbar(mpl_cm.ScalarMappable(cmap='tab20b',
-                                                                                     norm=mpl_colors.Normalize(
-                                                                                         vmin=self.engy_min / 3.6e6,
-                                                                                         vmax=self.engy_max / 3.6e6)),
-                                                               ax=self.ax)
-                    self.engy_colorbar.set_label('Energy [kWh]')
-                self.wind_colorbar = self.mainfig.colorbar(self.sm, ax=self.ax)
-                self.wind_colorbar.set_label('Wind [m/s]')
-            if self.airspeed is not None:
-                self.wind_colorbar.ax.axhline(self.airspeed, linestyle='--')
-                self.wind_colorbar.ax.annotate(r'$v_a$', xy=(-0.2, 0.51), xycoords='axes fraction',
-                                               size=12, ha='right', va='top')
+                self.wind_colorbar = self.mainfig.colorbar(self.sm_wind, ax=self.ax, pad=0.03)
+            self.wind_colorbar.set_label('Wind [m/s]', labelpad=10)
+            self.active_windcb = True
+
+        set_windcb = not needs_engy and not self.active_windcb
+        if set_windcb:
+            self.wind_colorbar.update_normal(self.sm_wind)
+            self.wind_colorbar.set_label('Wind [m/s]')
+            self.active_windcb = True
+        if set_engycb:
+            self.wind_colorbar.update_normal(self.sm_engy)
+            self.wind_colorbar.set_label('Energy [kWh]')
+            self.active_windcb = False
 
         # Wind anchor plot
         if showanchors:
@@ -1382,7 +1395,8 @@ class Display:
         self.draw_solver()
         if self.leg is None:
             self.leg = self.mainax.legend(handles=self.leg_handles, labels=self.leg_labels, loc='center left',
-                                          bbox_to_anchor=(1.2, 0.5))
+                                          bbox_to_anchor=(1.2, 0.2), handletextpad=0.5, handlelength=0.5,
+                                          markerscale=2)
         self.mainfig.canvas.draw()
 
     def draw_calibration(self):
@@ -1445,11 +1459,19 @@ class Display:
 
     def reload_time(self, val):
         self.tcur = self.tl + val * (self.tu - self.tl)
+        noyear = False
+        if self.tcur < 200000:
+            # Posix time less than 10 days after 1970-01-01 so
+            # date does not refer to real time
+            noyear = True
         try:
             d = datetime.fromtimestamp(self.tcur)
         except ValueError:
             d = None
-        self.ax_timedisplay.set_text(f'{str(d).split(".")[0]}')
+        maj_time = str(d).split(".")[0]
+        if noyear:
+            maj_time = maj_time.split('-')[2]
+        self.ax_timedisplay.set_text(f'{maj_time}')
         self.ax_timedisp_minor.set_text(f'{self.tcur:.3f}')
 
         self.draw_all()
@@ -1571,7 +1593,7 @@ class Display:
         if 't' in flags:
             self.toggle_rff()
 
-    def to_movie(self, N_frames=50, fps=10):
+    def to_movie(self, frames=50, fps=10):
         self._info('Rendering animation')
         anim_path = os.path.join(self.output_dir, 'anim')
         if not os.path.exists(anim_path):
@@ -1579,13 +1601,13 @@ class Display:
         else:
             for filename in os.listdir(anim_path):
                 os.remove(os.path.join(anim_path, filename))
-        for i in tqdm.tqdm(range(N_frames)):
-            self.reload_time(i / (N_frames - 1))
+        for i in tqdm.tqdm(range(frames)):
+            self.reload_time(i / (frames - 1))
             self.mainfig.savefig(os.path.join(anim_path, f'test_{i:0>4}.png'))
 
         command = \
             f"""
-        ffmpeg -y -framerate 10 -pattern_type glob \
+        ffmpeg -y -framerate {fps} -pattern_type glob \
         -i '{os.path.join(anim_path, '*.png')}'\
         '{os.path.join(self.output_dir, 'anim.mp4')}'
         """
