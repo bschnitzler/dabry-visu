@@ -22,6 +22,12 @@ before)
 
 ### Examples
 
-Previews of the tool
+Here are some previews of the tool
+
+- Resolution with extremal field
 
 ![](https://github.com/bschnitzler/mdisplay/blob/main/res/eft.gif)
+
+- Resolution with front tracking (interface to ToolboxLS)
+
+![](https://github.com/bschnitzler/mdisplay/blob/main/res/rft.gif)
