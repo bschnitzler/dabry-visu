@@ -956,7 +956,7 @@ class Display:
                                                          vmin=self.engy_min / 3.6e6,
                                                          vmax=self.engy_max / 3.6e6))
             if self.coords == 'gcs':
-                self.wind_colorbar = self.ax.colorbar(self.sm_wind, ax=self.ax, pad=0.03)
+                self.wind_colorbar = self.ax.colorbar(self.sm_wind, pad=0.1)
             elif self.coords == 'cartesian':
                 self.wind_colorbar = self.mainfig.colorbar(self.sm_wind, ax=self.ax, pad=0.03)
             self.wind_colorbar.set_label('Wind [m/s]', labelpad=10)
