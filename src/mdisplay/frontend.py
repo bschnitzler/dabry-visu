@@ -125,6 +125,7 @@ class FrontendHandler:
         self.display.set_output_path(self.example_dir)
         self.configure()
         self.display.set_mode(flags)
+        self.display.draw_all()
         self.display.update_title()
         if movie:
             kwargs = {}

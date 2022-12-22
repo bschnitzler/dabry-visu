@@ -122,6 +122,8 @@ class Display:
         self.mode_energy = True
         # Whether to draw extremal fields or not
         self.mode_ef_display = True
+        # Whether to rescale wind
+        self.rescale_wind = False
 
         # True if wind norm colobar is displayed, False if energy colorbar is displayed
         self.active_windcb = True
@@ -604,6 +606,8 @@ class Display:
 
         with h5py.File(self.trajs_fpath, 'r') as f:
             for k, traj in enumerate(f.values()):
+                if traj['ts'].shape[0] == 0:
+                    continue
                 if traj.attrs['coords'] != self.coords:
                     print(
                         f'[Warning] Traj. coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
@@ -626,7 +630,7 @@ class Display:
                 #     _traj['airspeed'] = np.zeros(traj['airspeed'].shape)
                 #     _traj['airspeed'][:] = traj['airspeed']
 
-                if 'energy' in traj.keys():
+                if 'energy' in traj.keys() and traj['energy'].shape[0] > 0:
                     _traj['energy'] = np.zeros(traj['energy'].shape)
                     _traj['energy'][:] = traj['energy']
                     cmin = _traj['energy'][:].min()
@@ -915,7 +919,9 @@ class Display:
         nt, nx, ny, _ = self.wind['data'].shape
         X = np.zeros((nx, ny))
         Y = np.zeros((nx, ny))
-        if not no_autoquiver:
+        if self.rescale_wind:
+            ur = 2
+        elif not no_autoquiver:
             ur = nx // 25
         else:
             ur = 1
@@ -1595,6 +1601,8 @@ class Display:
             self.toggle_rff()
         if 'h' in flags:
             self.mode_ef = False
+        if 'u' in flags:
+            self.rescale_wind = True
 
     def to_movie(self, frames=50, fps=10):
         self._info('Rendering animation')
