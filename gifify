@@ -1,0 +1,1 @@
+ffmpeg -i anim.mp4 -r 15 -ss 00:00:00 -to 00:00:05 -vf "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" anim.gif

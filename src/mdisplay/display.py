@@ -920,7 +920,7 @@ class Display:
         X = np.zeros((nx, ny))
         Y = np.zeros((nx, ny))
         if self.rescale_wind:
-            ur = 2
+            ur = 3
         elif not no_autoquiver:
             ur = nx // 25
         else:
@@ -1030,15 +1030,17 @@ class Display:
         qnorms = 1e-6 + np.sqrt(qU ** 2 + qV ** 2)
         kwargs = {
             'color': (0.4, 0.4, 0.4, 1.0),
-            'width': 0.001,
-            'pivot': 'mid',
+            #'width': 1,  # 0.001,
+            'pivot': 'tail',
             'alpha': 0.7,
+            'units': 'xy',
+            'minshaft': 2.,
             'zorder': ZO_WIND_VECTORS
         }
         if self.coords == 'gcs':
             kwargs['latlon'] = True
         if np.any(qnorms > self.cm_norm_min + 0.01 * (self.cm_norm_max - self.cm_norm_min)):
-            self.wind_quiver = self.ax.quiver(qX, qY, qU / qnorms, qV / qnorms, **kwargs)  # color=color)
+            self.wind_quiver = self.ax.quiver(qX, qY, qU, qV, **kwargs)  # color=color)
 
     # def setup_components(self):
     #     for k, state_plot in enumerate(self.state):
