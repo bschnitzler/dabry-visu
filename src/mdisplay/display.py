@@ -102,9 +102,11 @@ class Display:
         self.wind_fname = 'wind.h5'
         self.trajs_fname = 'trajectories.h5'
         self.rff_fname = 'rff.h5'
+        self.obs_fname = 'obs.h5'
         self.wind_fpath = None
         self.trajs_fpath = None
         self.rff_fpath = None
+        self.obs_fpath = None
         # 0 for no aggregation (fronts), 1 for aggregation and time cursor, 2 for aggrgation and no time cursor
         self.mode_aggregated = 0
         self.mode_controls = False
@@ -123,7 +125,7 @@ class Display:
         # Whether to draw extremal fields or not
         self.mode_ef_display = True
         # Whether to rescale wind
-        self.rescale_wind = False
+        self.rescale_wind = True
 
         # True if wind norm colobar is displayed, False if energy colorbar is displayed
         self.active_windcb = True
@@ -143,6 +145,9 @@ class Display:
         self.nx_rft = None
         self.ny_rft = None
         self.nt_rft = None
+
+        self.obstacles = None
+        self.obs_grid = None
 
         self.tv_wind = False
 
@@ -741,6 +746,19 @@ class Display:
             if len(failed_zeros) > 0:
                 Display._warn(f'No RFF value in zero band for indexes {tuple(failed_zeros)}')
 
+    def load_obs(self, filename=None):
+        if self.obs_fpath is None:
+            filename = self.obs_fname if filename is None else filename
+            self.obs_fpath = os.path.join(self.output_dir, filename)
+        if not os.path.exists(self.obs_fpath):
+            return
+        with h5py.File(self.obs_fpath, 'r') as f:
+            self.obstacles = np.zeros(f['data'].shape)
+            self.obstacles[:] = f['data']
+            self.obs_grid = np.zeros(f['grid'].shape)
+            self.obs_grid[:] = f['grid']
+
+
     def import_params(self, fname=None):
         """
         Load necessary data from parameter file.
@@ -836,6 +854,7 @@ class Display:
         self.load_wind()
         self.load_trajs()
         self.load_rff()
+        self.load_obs()
         n_trajs = len(self.trajs)
         n_rffs = 0 if self.rff is None else self.rff['data'].shape[0]
         if self.tl is not None and self.tu is not None:
@@ -911,7 +930,7 @@ class Display:
                 # ([-1000., 1000.],) if not debug else (np.linspace(-100000, 100000, 200),))
                 self.rff_contours.append(self.ax.contourf(*args, **self.rff_cntr_kwargs))
 
-    def draw_wind(self, showanchors=False, no_autoquiver=False):
+    def draw_wind(self, showanchors=False):
 
         # Erase previous drawings if existing
         self.clear_wind()
@@ -920,9 +939,7 @@ class Display:
         X = np.zeros((nx, ny))
         Y = np.zeros((nx, ny))
         if self.rescale_wind:
-            ur = 3
-        elif not no_autoquiver:
-            ur = nx // 25
+            ur = nx // 20
         else:
             ur = 1
         factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
@@ -1396,11 +1413,17 @@ class Display:
             # if target_radius is not None:
             #     self.mainax.add_patch(plt.Circle(c, target_radius))
 
+    def draw_obs(self):
+        if self.obstacles is None:
+            return
+        self.mainax.contourf(self.obs_grid[..., 0], self.obs_grid[..., 1], self.obstacles, (-0.01, 1.01), alpha=0.5, cmap='gray', hatches=['//'])
+
     def draw_all(self):
         self.draw_wind()
         self.draw_trajs()
         if self.has_display_rff:
             self.draw_rff()
+        self.draw_obs()
         self.draw_solver()
         if self.leg is None:
             self.leg = self.mainax.legend(handles=self.leg_handles, labels=self.leg_labels, loc='center left',
@@ -1604,7 +1627,7 @@ class Display:
         if 'h' in flags:
             self.mode_ef = False
         if 'u' in flags:
-            self.rescale_wind = True
+            self.rescale_wind = False
 
     def to_movie(self, frames=50, fps=10):
         self._info('Rendering animation')
