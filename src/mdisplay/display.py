@@ -161,6 +161,7 @@ class Display:
         self.id_traj_color = 0
 
         self.rff_contours = []
+        self.obs_contours = []
 
         self.label_list = []
         self.scatter_init = None
@@ -282,7 +283,10 @@ class Display:
         plt.rc('font', family=self.fsc.font_family)
         plt.rc('mathtext', fontset=self.fsc.mathtext_fontset)
 
-        self.mainfig = plt.figure(num=f"Navigation problem ({self.coords})",
+        version_file = os.path.join(os.path.dirname(__file__), '.version')
+        with open(version_file, 'r') as f:
+            version = f.readline()
+        self.mainfig = plt.figure(num=f"mdisplay v{version} ({self.coords})",
                                   constrained_layout=False,
                                   figsize=(12, 8))
         self.mainfig.canvas.mpl_disconnect(self.mainfig.canvas.manager.key_press_handler_id)
@@ -572,6 +576,13 @@ class Display:
                     coll.remove()
             self.rff_contours = []
 
+    def clear_obs(self):
+        if len(self.obs_contours) != 0:
+            for c in self.obs_contours:
+                for coll in c.collections:
+                    coll.remove()
+            self.obs_contours = []
+
     def clear_solver(self):
         if self.scatter_init is not None:
             self.scatter_init.remove()
@@ -757,7 +768,6 @@ class Display:
             self.obstacles[:] = f['data']
             self.obs_grid = np.zeros(f['grid'].shape)
             self.obs_grid[:] = f['grid']
-
 
     def import_params(self, fname=None):
         """
@@ -1047,7 +1057,7 @@ class Display:
         qnorms = 1e-6 + np.sqrt(qU ** 2 + qV ** 2)
         kwargs = {
             'color': (0.4, 0.4, 0.4, 1.0),
-            #'width': 1,  # 0.001,
+            # 'width': 1,  # 0.001,
             'pivot': 'tail',
             'alpha': 0.7,
             'units': 'xy',
@@ -1414,9 +1424,33 @@ class Display:
             #     self.mainax.add_patch(plt.Circle(c, target_radius))
 
     def draw_obs(self):
+        self.clear_obs()
         if self.obstacles is None:
             return
-        self.mainax.contourf(self.obs_grid[..., 0], self.obs_grid[..., 1], self.obstacles, (-0.01, 1.01), alpha=0.5, cmap='gray', hatches=['//'])
+        if np.all(self.obstacles < 0.):
+            return
+        ma = np.ma.masked_array(self.obstacles, mask=self.obstacles < -0.5)
+        if self.coords == 'cartesian':
+            ax = self.mainax
+            kwargs = {}
+            factor = 1.
+        else:
+            ax = self.ax
+            kwargs = {'latlon': True}
+            factor = RAD_TO_DEG
+        matplotlib.rcParams['hatch.color'] = (0., 0., 0., 0.3)
+        self.obs_contours.append(ax.contourf(factor * self.obs_grid[..., 0],
+                                             factor * self.obs_grid[..., 1],
+                                             ma,
+                                             alpha=0.,
+                                             hatches=['O'],
+                                             antialiased=True,
+                                             zorder=ZO_OBS,
+                                             **kwargs))
+        if self.coords == 'cartesian':
+            self.obs_contours.append(ax.contour(factor * self.obs_grid[..., 0],
+                                                factor * self.obs_grid[..., 1],
+                                                self.obstacles, [-0.5]))
 
     def draw_all(self):
         self.draw_wind()

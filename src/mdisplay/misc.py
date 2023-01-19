@@ -10,6 +10,7 @@ ZO_TRAJS = 3
 ZO_RFF = 4
 ZO_WIND_ANCHORS = 5
 ZO_ANNOT = 5
+ZO_OBS = 6
 
 RAD_TO_DEG = 180. / np.pi
 DEG_TO_RAD = np.pi / 180.

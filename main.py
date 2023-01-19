@@ -1,4 +1,5 @@
 import argparse
+import os.path
 import sys
 
 from mermoz.post_processing import PostProcessing
