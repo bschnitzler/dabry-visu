@@ -285,7 +285,7 @@ class Display:
 
         version_file = os.path.join(os.path.dirname(__file__), '.version')
         with open(version_file, 'r') as f:
-            version = f.readline()
+            version = f.readline() 
         self.mainfig = plt.figure(num=f"mdisplay v{version} ({self.coords})",
                                   constrained_layout=False,
                                   figsize=(12, 8))
