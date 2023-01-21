@@ -2,6 +2,7 @@ import colorsys
 import json
 import os
 import sys
+import warnings
 import webbrowser
 from datetime import datetime
 
@@ -285,7 +286,7 @@ class Display:
 
         version_file = os.path.join(os.path.dirname(__file__), '.version')
         with open(version_file, 'r') as f:
-            version = f.readline() 
+            version = f.readline()
         self.mainfig = plt.figure(num=f"mdisplay v{version} ({self.coords})",
                                   constrained_layout=False,
                                   figsize=(12, 8))
@@ -1028,7 +1029,9 @@ class Display:
         if not self.mode_wind:
             kwargs['shading'] = 'auto'
             kwargs['antialiased'] = True
-            self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
         else:
             znorms3d = scipy.ndimage.zoom(norms3d, 3)
             zX = scipy.ndimage.zoom(X, 3)
