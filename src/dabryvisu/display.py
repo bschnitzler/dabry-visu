@@ -22,8 +22,8 @@ import time
 from pyproj import Proj
 from scipy.interpolate import griddata
 
-from dabryvisu.font_config import FontsizeConf
-from dabryvisu.misc import *
+from .font_config import FontsizeConf
+from .misc import *
 
 from dabry.geodata import GeoData
 

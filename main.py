@@ -1,9 +1,8 @@
 import argparse
-import os.path
 import sys
 
-from dabry.post_processing import PostProcessing
 from dabryvisu.frontend import FrontendHandler
+from dabry.post_processing import PostProcessing
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Trajectory planning display tool')

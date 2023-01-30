@@ -2,9 +2,11 @@ import os.path
 import easygui
 import h5py
 import json
+import sys
+import numpy as np
 
-from dabryvisu.display import Display
-from dabry.misc import *
+from .display import Display
+from dabry.misc import Utils
 
 
 class FrontendHandler:
@@ -154,7 +156,7 @@ class FrontendHandler:
         opti_ceil = params['target_radius']
         # print(opti_ceil)
 
-        factor = DEG_TO_RAD if params['coords'] == COORD_GCS else 1.
+        factor = Utils.DEG_TO_RAD if params['coords'] == Utils.COORD_GCS else 1.
         target = factor * np.array(params['point_target'])
         # print(target)
 
@@ -178,8 +180,8 @@ class FrontendHandler:
                         break
                     p = factor * np.array(p)
                     if k > 0:
-                        length += distance(p, last_p, coords=coords)
-                    if notfound and distance(p, target, coords=coords) < 1.05 * opti_ceil:
+                        length += Utils.distance(p, last_p, coords=coords)
+                    if notfound and Utils.distance(p, target, coords=coords) < 1.05 * opti_ceil:
                         reach_time = traj["ts"][k]
                         notfound = False
                     last_p[:] = p
