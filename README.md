@@ -2,7 +2,7 @@
 
 ### Description
 
-This tool is a companion to the `mermoz` module (<https://github.com/bschnitzler/mermoz>)
+This tool is a companion to the `dabry` module (<https://github.com/bschnitzler/dabry>)
 
 It handles the visualisation of trajectory optimization problems 
 and the different objects at stake:
@@ -16,9 +16,11 @@ problems.
 
 ### Getting started
 
-1) Write the path to the `mermoz` module in the `MERMOZ_PATH` file.
-2) Run the bash script `run.sh` (you may need to make it executable
-before)
+1) Write the path to the `dabry` module in the `DABRYPATH` file.
+2) Run the script `run.sh` using for instance
+```sh
+bash run.sh
+```
 
 ### Examples
 
