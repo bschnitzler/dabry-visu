@@ -1,1 +1,1 @@
-PYTHONPATH=$(cat MERMOZ_PATH)/src:$(pwd)/src MERMOZ_PATH=$(cat MERMOZ_PATH) python main.py "$@"
+PYTHONPATH=$(cat DABRYPATH)/src:$(pwd)/src DABRYPATH=$(cat DABRYPATH) python main.py "$@"

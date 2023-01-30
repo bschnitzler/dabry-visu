@@ -2,8 +2,8 @@ import argparse
 import os.path
 import sys
 
-from mermoz.post_processing import PostProcessing
-from mdisplay.frontend import FrontendHandler
+from dabry.post_processing import PostProcessing
+from dabryvisu.frontend import FrontendHandler
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Trajectory planning display tool')
