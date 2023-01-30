@@ -2,6 +2,7 @@ import colorsys
 import json
 import os
 import sys
+import warnings
 import webbrowser
 from datetime import datetime
 
@@ -21,9 +22,10 @@ import time
 from pyproj import Proj
 from scipy.interpolate import griddata
 
-from mdisplay.font_config import FontsizeConf
-from mdisplay.geodata import GeoData
-from mdisplay.misc import *
+from .font_config import FontsizeConf
+from .misc import *
+
+from dabry.geodata import GeoData
 
 state_names = [r"$x\:[m]$", r"$y\:[m]$"]
 control_names = [r"$u\:[rad]$"]
@@ -286,7 +288,7 @@ class Display:
         version_file = os.path.join(os.path.dirname(__file__), '.version')
         with open(version_file, 'r') as f:
             version = f.readline()
-        self.mainfig = plt.figure(num=f"mdisplay v{version} ({self.coords})",
+        self.mainfig = plt.figure(num=f"dabryvisu v{version} ({self.coords})",
                                   constrained_layout=False,
                                   figsize=(12, 8))
         self.mainfig.canvas.mpl_disconnect(self.mainfig.canvas.manager.key_press_handler_id)
@@ -1028,7 +1030,9 @@ class Display:
         if not self.mode_wind:
             kwargs['shading'] = 'auto'
             kwargs['antialiased'] = True
-            self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
         else:
             znorms3d = scipy.ndimage.zoom(norms3d, 3)
             zX = scipy.ndimage.zoom(X, 3)

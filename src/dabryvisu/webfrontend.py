@@ -3,7 +3,7 @@ import mpld3
 import shutil
 import eel
 
-from mdisplay.display import Display
+from dabryvisu.display import Display
 
 
 class WebFrontend:
@@ -22,7 +22,7 @@ class WebFrontend:
         os.mkdir(self.tmp_path)
         shutil.copy(self.html_src_fpath, self.html_dst_fpath)
 
-        output_path = '/home/bastien/Documents/work/mermoz/output/example_solver-ef_3obs'
+        output_path = '/home/bastien/Documents/work/dabry/output/example_solver-ef_3obs'
         self.display = Display()
         self.display.set_output_path(output_path)
         self.display.nocontrols = True
