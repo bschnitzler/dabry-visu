@@ -48,8 +48,8 @@ class Display:
         self.y_min = None
         self.y_max = None
 
-        self.x_offset = 0.
-        self.y_offset = 0.
+        self.x_offset = 0.2
+        self.y_offset = 0.2
 
         # Main figure
         self.mainfig = None
@@ -215,6 +215,9 @@ class Display:
         self.ef_agg_display = {}
 
         self.increment_factor = 0.001
+
+        self.x_init = None
+        self.x_target = None
 
         self.geodata = GeoData()
 
@@ -406,20 +409,35 @@ class Display:
                 # tuple(RAD_TO_DEG * np.array(middle(np.array((self.x_min, self.y_min)),
                 #                                    np.array((self.x_max, self.y_max)))))
                 proj = Proj(proj='ortho', lon_0=kwargs['lon_0'], lat_0=kwargs['lat_0'])
-                pgrid = np.array(proj(RAD_TO_DEG * self.wind['grid'][:, :, 0], RAD_TO_DEG * self.wind['grid'][:, :, 1]))
-                px_min = np.min(pgrid[0])
-                px_max = np.max(pgrid[0])
-                py_min = np.min(pgrid[1])
-                py_max = np.max(pgrid[1])
-                self.x_min, self.y_min = DEG_TO_RAD * np.array(proj(px_min, py_min, inverse=True))
-                self.x_max, self.y_max = DEG_TO_RAD * np.array(proj(px_max, py_max, inverse=True))
+                # pgrid = np.array(proj(RAD_TO_DEG * self.wind['grid'][:, :, 0],
+                # RAD_TO_DEG * self.wind['grid'][:, :, 1]))
+                # px_min = np.min(pgrid[0])
+                # px_max = np.max(pgrid[0])
+                # py_min = np.min(pgrid[1])
+                # py_max = np.max(pgrid[1])
+                if self.x_init is not None and self.x_target is not None:
+                    x1, y1 = proj(*(RAD_TO_DEG * self.x_init))
+                    x2, y2 = proj(*(RAD_TO_DEG * self.x_target))
+                    x_min = min(x1, x2)
+                    x_max = max(x1, x2)
+                    y_min = min(y1, y2)
+                    y_max = max(y1, y2)
 
-                kwargs['llcrnrx'], kwargs['llcrnry'] = \
-                    proj(RAD_TO_DEG * (self.x_min - self.x_offset * (self.x_max - self.x_min)),
-                         RAD_TO_DEG * (self.y_min - self.y_offset * (self.y_max - self.y_min)))
-                kwargs['urcrnrx'], kwargs['urcrnry'] = \
-                    proj(RAD_TO_DEG * (self.x_max + self.x_offset * (self.x_max - self.x_min)),
-                         RAD_TO_DEG * (self.y_max + self.y_offset * (self.y_max - self.y_min)))
+                    kwargs['llcrnrx'], kwargs['llcrnry'] = \
+                        x_min - self.x_offset * (x_max - x_min), \
+                        y_min - self.y_offset * (y_max - y_min)
+                    kwargs['urcrnrx'], kwargs['urcrnry'] = \
+                        x_max + self.x_offset * (x_max - x_min), \
+                        y_max + self.y_offset * (y_max - y_min)
+                    bounds1 = proj(kwargs['llcrnrx'], kwargs['llcrnry'])
+                    bounds2 = proj(kwargs['urcrnrx'], kwargs['urcrnry'])
+                    for b in bounds1 + bounds2:
+                        if np.isnan(b):
+                            del kwargs['llcrnrx']
+                            del kwargs['llcrnry']
+                            del kwargs['urcrnrx']
+                            del kwargs['urcrnry']
+                            break
 
             elif self.projection == 'lcc':
                 kwargs['lon_0'] = RAD_TO_DEG * 0.5 * (self.x_min + self.x_max)
@@ -441,19 +459,22 @@ class Display:
             lw = 0.5
             dashes = (2, 2)
             # draw parallels
-            lat_min = RAD_TO_DEG * min(self.y_min, self.y_max)
-            lat_max = RAD_TO_DEG * max(self.y_min, self.y_max)
-            n_lat = floor((lat_max - lat_min) / 10) + 2
-            self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0],
-                                   linewidth=lw,
-                                   dashes=dashes)
-            # draw meridians
-            lon_min = RAD_TO_DEG * min(self.x_min, self.x_max)
-            lon_max = RAD_TO_DEG * max(self.x_min, self.x_max)
-            n_lon = floor((lon_max - lon_min) / 10) + 2
-            self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 0, 0, 1],
-                                   linewidth=lw,
-                                   dashes=dashes)
+            try:
+                lat_min = RAD_TO_DEG * min(self.y_min, self.y_max)
+                lat_max = RAD_TO_DEG * max(self.y_min, self.y_max)
+                n_lat = floor((lat_max - lat_min) / 10) + 2
+                self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0],
+                                       linewidth=lw,
+                                       dashes=dashes)
+                # draw meridians
+                lon_min = RAD_TO_DEG * min(self.x_min, self.x_max)
+                lon_max = RAD_TO_DEG * max(self.x_min, self.x_max)
+                n_lon = floor((lon_max - lon_min) / 10) + 2
+                self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 0, 0, 1],
+                                       linewidth=lw,
+                                       dashes=dashes)
+            except ValueError:
+                pass
 
         if cartesian:
             self.mainax.axhline(y=0, color='k', linewidth=0.5)
@@ -821,10 +842,25 @@ class Display:
                 self.coords = noted_coords.pop()
 
         missing = set(self.p_names).difference(self.params.keys())
-        # Backward compatibility
-        for a in ['init', 'target']:
-            if f'point_{a}' in self.params.keys():
-                missing.remove(f'x_{a}')
+        try:
+            self.x_init = np.array(self.params['x_init'])
+            missing.remove(f'x_init')
+        except KeyError:
+            # Backward compatibility
+            try:
+                self.x_init = np.array(self.params['point_init'])
+                missing.remove(f'x_init')
+            except KeyError:
+                pass
+        try:
+            self.x_target = np.array(self.params['x_target'])
+            missing.remove(f'x_target')
+        except KeyError:
+            try:
+                self.x_target = np.array(self.params['point_target'])
+                missing.remove(f'x_target')
+            except KeyError:
+                pass
 
         for name in ['airspeed', 'va', 'v_a']:
             if name in self.params.keys():
@@ -1382,34 +1418,10 @@ class Display:
         else:
             scatterax = self.mainax
 
-        # Fetching parameters
-        target_radius = None
-        try:
-            target_radius = self.params['target_radius']
-        except KeyError:
-            pass
-        x_init = None
-        try:
-            x_init = np.array(self.params['x_init'])
-        except KeyError:
-            # Backward compatibility
-            try:
-                x_init = np.array(self.params['point_init'])
-            except KeyError:
-                pass
-        x_target = None
-        try:
-            x_target = np.array(self.params['x_target'])
-        except KeyError:
-            try:
-                x_target = np.array(self.params['point_target'])
-            except KeyError:
-                pass
-
         # Init point
-        if x_init is not None:
+        if self.x_init is not None:
             factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
-            self.scatter_init = scatterax.scatter(*(factor * x_init), s=30., color='black', marker='o',
+            self.scatter_init = scatterax.scatter(*(factor * self.x_init), s=30., color='black', marker='o',
                                                   zorder=ZO_ANNOT, **kwargs)
 
             # if labeling:
@@ -1417,9 +1429,9 @@ class Display:
             # if target_radius is not None:
             #     self.mainax.add_patch(plt.Circle(c, target_radius))
         # Target point
-        if x_target is not None:
+        if self.x_target is not None:
             factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
-            self.scatter_target = scatterax.scatter(*(factor * x_target), s=40., color='black', marker='*',
+            self.scatter_target = scatterax.scatter(*(factor * self.x_target), s=40., color='black', marker='*',
                                                     zorder=ZO_ANNOT, **kwargs)
 
             # if labeling:
