@@ -5,9 +5,9 @@ class FontsizeConf:
     def __init__(self):
         self.fontsize = 18
         self.axes_titlesize = 24
-        self.axes_labelsize = 18
-        self.xtick_labelsize = 18
-        self.ytick_labelsize = 18
+        self.axes_labelsize = 22
+        self.xtick_labelsize = 22
+        self.ytick_labelsize = 22
         self.legend_fontsize = 15
         self.button_fontsize = 14
         self.timedisp_major = 20

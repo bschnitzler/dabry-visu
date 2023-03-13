@@ -114,7 +114,7 @@ class FrontendHandler:
                     f.writelines(sel_dir)
 
     def run_frontend(self, noparams=True, noshow=False, block=False, movie=False, frames=None, fps=None,
-                     flags=''):
+                     movie_format='apng', mini= False, flags=''):
         if self.mode in ['notebook', 'default']:
             self.example_dir = os.path.join(self.output_dir, self.example_name())
         elif self.mode == 'user':
@@ -135,6 +135,8 @@ class FrontendHandler:
                 kwargs['frames'] = frames
             if fps is not None:
                 kwargs['fps'] = fps
+            kwargs['movie_format'] = movie_format
+            kwargs['mini'] = mini
             self.display.to_movie(**kwargs)
         elif not noshow:
             try:

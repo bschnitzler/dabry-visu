@@ -9,5 +9,6 @@ matplotlib==3.4.3
 mpld3==0.5.9
 numpy
 pyproj==3.4.1
+PyQt5
 scipy
 tqdm==4.62.3
