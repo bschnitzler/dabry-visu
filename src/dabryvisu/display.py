@@ -304,10 +304,7 @@ class Display:
         plt.rc('font', family=self.fsc.font_family)
         plt.rc('mathtext', fontset=self.fsc.mathtext_fontset)
 
-        version_file = os.path.join(os.path.dirname(__file__), '.version')
-        with open(version_file, 'r') as f:
-            version = f.readline()
-        self.mainfig = plt.figure(num=f"dabryvisu v{version} ({self.coords})",
+        self.mainfig = plt.figure(num=f"dabryvisu ({self.coords})",
                                   constrained_layout=False,
                                   figsize=(12, 8))
         self.mainfig.canvas.mpl_disconnect(self.mainfig.canvas.manager.key_press_handler_id)

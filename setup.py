@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='dabry',
+    name='dabryvisu',
     version='1.0',
     description='Trajectory optimization in flow fields',
     author='Bastien Schnitzler',
@@ -9,7 +9,6 @@ setup(
     packages=find_packages('src'),  # same as name
     package_dir={'': 'src'},
     install_requires=[
-        'wheel',
         'basemap',
         'easygui',
         'eel',
