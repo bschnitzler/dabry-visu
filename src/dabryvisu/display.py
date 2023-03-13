@@ -301,7 +301,7 @@ class Display:
         plt.rc('xtick', labelsize=self.fsc.xtick_labelsize)
         plt.rc('ytick', labelsize=self.fsc.ytick_labelsize)
         plt.rc('legend', fontsize=self.fsc.legend_fontsize)
-        plt.rc('font', family=self.fsc.font_family)
+        #plt.rc('font', family=self.fsc.font_family)
         plt.rc('mathtext', fontset=self.fsc.mathtext_fontset)
 
         self.mainfig = plt.figure(num=f"dabryvisu ({self.coords})",
