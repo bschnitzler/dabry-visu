@@ -12,7 +12,7 @@ class FontsizeConf:
         self.button_fontsize = 14
         self.timedisp_major = 20
         self.timedisp_minor = 14
-        self.font_family = 'ibm plex sans' # 'lato'
+        # self.font_family = 'ibm plex sans' # 'lato'
         self.mathtext_fontset = 'cm'
 
     # def __init__(self):
