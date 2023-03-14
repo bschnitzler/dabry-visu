@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
     name='dabryvisu',
-    version='1.0',
-    description='Trajectory optimization in flow fields',
+    version='1.0.1',
+    description='Visualize trajectory optimization in flow fields',
     author='Bastien Schnitzler',
     author_email='bastien.schnitzler@live.fr',
     packages=find_packages('src'),  # same as name

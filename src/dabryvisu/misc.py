@@ -1,8 +1,24 @@
 import colorsys
 from math import atan2
-
 import numpy as np
 from matplotlib import pyplot as plt
+
+
+class FontsizeConf:
+
+    def __init__(self):
+        self.fontsize = 18
+        self.axes_titlesize = 24
+        self.axes_labelsize = 22
+        self.xtick_labelsize = 22
+        self.ytick_labelsize = 22
+        self.legend_fontsize = 15
+        self.button_fontsize = 14
+        self.timedisp_major = 20
+        self.timedisp_minor = 14
+        self.font_family = 'lato'
+        self.mathtext_fontset = 'cm'
+
 
 ZO_WIND_NORM = 1
 ZO_WIND_VECTORS = 2
@@ -30,7 +46,7 @@ my_grey3 = np.array([0.5, 0.5, 0.5, 1.0])
 my_green = np.array([0., 0.8, 0., 1.])
 my_green_t = np.diag((1., 1., 1., 0.5)).dot(my_green)
 my_purple = np.array([135 / 255, 23 / 255, 176 / 255, 1.0])
-my_yellow = np.array([237/255, 213/255, 31/255, 1.])
+my_yellow = np.array([237 / 255, 213 / 255, 31 / 255, 1.])
 
 reachability_colors = {
     'pmp': {
