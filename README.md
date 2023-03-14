@@ -80,3 +80,4 @@ Here are some previews of the tool
 ![](res/rft.gif)
 
 More examples can be found on the dedicated [website](https://dabry-navigation.github.io).
+
