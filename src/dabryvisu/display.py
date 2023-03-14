@@ -22,10 +22,10 @@ import time
 from pyproj import Proj
 from scipy.interpolate import griddata
 
-from .font_config import FontsizeConf
 from .misc import *
 
 from dabry.geodata import GeoData
+from dabry.problem import IndexedProblem
 
 state_names = [r"$x\:[m]$", r"$y\:[m]$"]
 control_names = [r"$u\:[rad]$"]
@@ -51,6 +51,9 @@ class Display:
         self.x_offset = 0.
         self.y_offset = 0.
 
+        self.x_offset_gcs = 0.2
+        self.y_offset_gcs = 0.2
+
         # Main figure
         self.mainfig = None
         self.mainax = None
@@ -68,9 +71,9 @@ class Display:
         self.map_adjoint = None
         self.display_setup = False
         self.cm = None
-        self.selected_cm = custom_cm  # windy_cm
+        self.selected_cm = windy_cm  # custom_cm  # windy_cm
         self.cm_norm_min = 0.
-        self.cm_norm_max = 46.
+        self.cm_norm_max = 24  # 46.
         self.airspeed = None
         self.title = title
         self.axes_equal = True
@@ -135,6 +138,8 @@ class Display:
         self.has_display_rff = True
 
         self.wind = None
+        self.wind_norm_min = None
+        self.wind_norm_max = None
         self.trajs = []
         self.rff = None
         self.rff_cntr_kwargs = {
@@ -199,6 +204,16 @@ class Display:
         # Time window upper bound
         # Maximum among all upper bounds (wind, trajs, rffs)
         self.tu = None
+
+        self.tl_wind = None
+        self.tu_wind = None
+
+        self.tl_traj = None
+        self.tu_traj = None
+
+        self.tl_rff = None
+        self.tu_rff = None
+
         # Current time step to display
         self.tcur = None
 
@@ -215,6 +230,9 @@ class Display:
         self.ef_agg_display = {}
 
         self.increment_factor = 0.001
+
+        self.x_init = None
+        self.x_target = None
 
         self.geodata = GeoData()
 
@@ -282,13 +300,10 @@ class Display:
         plt.rc('xtick', labelsize=self.fsc.xtick_labelsize)
         plt.rc('ytick', labelsize=self.fsc.ytick_labelsize)
         plt.rc('legend', fontsize=self.fsc.legend_fontsize)
-        plt.rc('font', family=self.fsc.font_family)
+        #plt.rc('font', family=self.fsc.font_family)
         plt.rc('mathtext', fontset=self.fsc.mathtext_fontset)
 
-        version_file = os.path.join(os.path.dirname(__file__), '.version')
-        with open(version_file, 'r') as f:
-            version = f.readline()
-        self.mainfig = plt.figure(num=f"dabryvisu v{version} ({self.coords})",
+        self.mainfig = plt.figure(num=f"dabryvisu ({self.coords})",
                                   constrained_layout=False,
                                   figsize=(12, 8))
         self.mainfig.canvas.mpl_disconnect(self.mainfig.canvas.manager.key_press_handler_id)
@@ -302,7 +317,6 @@ class Display:
         )
         self.mainfig.suptitle(self.title)
         self.mainax = self.mainfig.add_subplot(box_aspect=1., anchor='C')
-
         if self.mode == "only-map":
             # gs = GridSpec(1, 1, figure=self.mainfig)
             # self.map = self.mainfig.add_subplot(gs[0, 0])
@@ -406,20 +420,35 @@ class Display:
                 # tuple(RAD_TO_DEG * np.array(middle(np.array((self.x_min, self.y_min)),
                 #                                    np.array((self.x_max, self.y_max)))))
                 proj = Proj(proj='ortho', lon_0=kwargs['lon_0'], lat_0=kwargs['lat_0'])
-                pgrid = np.array(proj(RAD_TO_DEG * self.wind['grid'][:, :, 0], RAD_TO_DEG * self.wind['grid'][:, :, 1]))
-                px_min = np.min(pgrid[0])
-                px_max = np.max(pgrid[0])
-                py_min = np.min(pgrid[1])
-                py_max = np.max(pgrid[1])
-                self.x_min, self.y_min = DEG_TO_RAD * np.array(proj(px_min, py_min, inverse=True))
-                self.x_max, self.y_max = DEG_TO_RAD * np.array(proj(px_max, py_max, inverse=True))
+                # pgrid = np.array(proj(RAD_TO_DEG * self.wind['grid'][:, :, 0],
+                # RAD_TO_DEG * self.wind['grid'][:, :, 1]))
+                # px_min = np.min(pgrid[0])
+                # px_max = np.max(pgrid[0])
+                # py_min = np.min(pgrid[1])
+                # py_max = np.max(pgrid[1])
+                if self.x_init is not None and self.x_target is not None:
+                    x1, y1 = proj(*(RAD_TO_DEG * self.x_init))
+                    x2, y2 = proj(*(RAD_TO_DEG * self.x_target))
+                    x_min = min(x1, x2)
+                    x_max = max(x1, x2)
+                    y_min = min(y1, y2)
+                    y_max = max(y1, y2)
 
-                kwargs['llcrnrx'], kwargs['llcrnry'] = \
-                    proj(RAD_TO_DEG * (self.x_min - self.x_offset * (self.x_max - self.x_min)),
-                         RAD_TO_DEG * (self.y_min - self.y_offset * (self.y_max - self.y_min)))
-                kwargs['urcrnrx'], kwargs['urcrnry'] = \
-                    proj(RAD_TO_DEG * (self.x_max + self.x_offset * (self.x_max - self.x_min)),
-                         RAD_TO_DEG * (self.y_max + self.y_offset * (self.y_max - self.y_min)))
+                    kwargs['llcrnrx'], kwargs['llcrnry'] = \
+                        x_min - self.x_offset_gcs * (x_max - x_min), \
+                        y_min - self.y_offset_gcs * (y_max - y_min)
+                    kwargs['urcrnrx'], kwargs['urcrnry'] = \
+                        x_max + self.x_offset_gcs * (x_max - x_min), \
+                        y_max + self.y_offset_gcs * (y_max - y_min)
+                    bounds1 = proj(kwargs['llcrnrx'], kwargs['llcrnry'])
+                    bounds2 = proj(kwargs['urcrnrx'], kwargs['urcrnry'])
+                    for b in bounds1 + bounds2:
+                        if np.isnan(b):
+                            del kwargs['llcrnrx']
+                            del kwargs['llcrnry']
+                            del kwargs['urcrnrx']
+                            del kwargs['urcrnry']
+                            break
 
             elif self.projection == 'lcc':
                 kwargs['lon_0'] = RAD_TO_DEG * 0.5 * (self.x_min + self.x_max)
@@ -441,23 +470,26 @@ class Display:
             lw = 0.5
             dashes = (2, 2)
             # draw parallels
-            lat_min = RAD_TO_DEG * min(self.y_min, self.y_max)
-            lat_max = RAD_TO_DEG * max(self.y_min, self.y_max)
-            n_lat = floor((lat_max - lat_min) / 10) + 2
-            self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0],
-                                   linewidth=lw,
-                                   dashes=dashes)
-            # draw meridians
-            lon_min = RAD_TO_DEG * min(self.x_min, self.x_max)
-            lon_max = RAD_TO_DEG * max(self.x_min, self.x_max)
-            n_lon = floor((lon_max - lon_min) / 10) + 2
-            self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 0, 0, 1],
-                                   linewidth=lw,
-                                   dashes=dashes)
+            try:
+                lat_min = RAD_TO_DEG * min(self.y_min, self.y_max)
+                lat_max = RAD_TO_DEG * max(self.y_min, self.y_max)
+                n_lat = floor((lat_max - lat_min) / 10) + 2
+                self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0],
+                                       linewidth=lw,
+                                       dashes=dashes, textcolor=(1., 1., 1., 0.))
+                # draw meridians
+                lon_min = RAD_TO_DEG * min(self.x_min, self.x_max)
+                lon_max = RAD_TO_DEG * max(self.x_min, self.x_max)
+                n_lon = floor((lon_max - lon_min) / 10) + 2
+                self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 0, 0, 1],
+                                       linewidth=lw,
+                                       dashes=dashes)
+            except ValueError:
+                pass
 
         if cartesian:
-            self.mainax.axhline(y=0, color='k', linewidth=0.5)
-            self.mainax.axvline(x=0, color='k', linewidth=0.5)
+            # self.mainax.axhline(y=0, color='k', linewidth=0.5)
+            # self.mainax.axvline(x=0, color='k', linewidth=0.5)
             if self.axes_equal:
                 self.mainax.axis('equal')
             self.mainax.set_xlim(self.x_min - self.x_offset * (self.x_max - self.x_min),
@@ -596,10 +628,13 @@ class Display:
         if self.wind_fpath is None:
             filename = self.wind_fname if filename is None else filename
             self.wind_fpath = os.path.join(self.output_dir, filename)
+            self.wind_fpath = os.path.join(self.output_dir, filename)
         with h5py.File(self.wind_fpath, 'r') as f:
             self.wind = {}
             self.wind['data'] = np.zeros(f['data'].shape)
             self.wind['data'][:] = f['data']
+            norms = np.linalg.norm(f['data'], axis=3)
+            self.wind_norm_min, self.wind_norm_max = np.min(norms), np.max(norms)
             self.wind['attrs'] = {}
             for k, v in f.attrs.items():
                 self.wind['attrs'][k] = v
@@ -609,84 +644,84 @@ class Display:
             self.wind['ts'][:] = f['ts']
             if self.wind['ts'].shape[0] > 1:
                 self.tv_wind = True
-                self.tl = self.wind['ts'][0]
-                tu = self.wind['ts'][-1]
-                if self.tu is None or tu > self.tu:
-                    self.tu = tu
+                self.tl_wind = self.wind['ts'][0]
+                self.tu_wind = self.wind['ts'][-1]
 
     def load_trajs(self, filename=None):
         self.trajs = []
         if self.trajs_fpath is None:
             filename = self.trajs_fname if filename is None else filename
-            self.trajs_fpath = os.path.join(self.output_dir, filename)
-        if not os.path.exists(self.trajs_fpath):
+            trajfiles = [name for name in os.listdir(self.output_dir)
+                         if name.startswith(self.trajs_fname.split('.')[0])]
+            self.trajs_fpath = list(map(lambda fn: os.path.join(self.output_dir, fn), trajfiles))
+        if len(self.trajs_fpath) == 0 or not os.path.exists(self.trajs_fpath[0]):
             return
+        for traj_fpath in self.trajs_fpath:
+            with h5py.File(traj_fpath, 'r') as f:
+                for k, traj in enumerate(f.values()):
+                    if traj['ts'].shape[0] <= 1:
+                        continue
+                    if traj.attrs['coords'] != self.coords:
+                        print(
+                            f'[Warning] Traj. coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
 
-        with h5py.File(self.trajs_fpath, 'r') as f:
-            for k, traj in enumerate(f.values()):
-                if traj['ts'].shape[0] == 0:
-                    continue
-                if traj.attrs['coords'] != self.coords:
-                    print(
-                        f'[Warning] Traj. coord type {traj.attrs["coords"]} differs from display mode {self.coords}')
+                    """
+                    if self.nt_tick is not None:
+                        kwargs['nt_tick'] = self.nt_tick
+                    """
+                    _traj = {}
+                    _traj['data'] = np.zeros(traj['data'].shape)
+                    _traj['data'][:] = traj['data']
+                    _traj['controls'] = np.zeros(traj['controls'].shape)
+                    _traj['controls'][:] = traj['controls']
+                    _traj['ts'] = np.zeros(traj['ts'].shape)
+                    _traj['ts'][:] = traj['ts']
+                    if _traj['ts'].shape[0] == 0:
+                        continue
 
-                """
-                if self.nt_tick is not None:
-                    kwargs['nt_tick'] = self.nt_tick
-                """
-                _traj = {}
-                _traj['data'] = np.zeros(traj['data'].shape)
-                _traj['data'][:] = traj['data']
-                _traj['controls'] = np.zeros(traj['controls'].shape)
-                _traj['controls'][:] = traj['controls']
-                _traj['ts'] = np.zeros(traj['ts'].shape)
-                _traj['ts'][:] = traj['ts']
-                if _traj['ts'].shape[0] == 0:
-                    continue
+                    # if 'airspeed' in traj.keys():
+                    #     _traj['airspeed'] = np.zeros(traj['airspeed'].shape)
+                    #     _traj['airspeed'][:] = traj['airspeed']
 
-                # if 'airspeed' in traj.keys():
-                #     _traj['airspeed'] = np.zeros(traj['airspeed'].shape)
-                #     _traj['airspeed'][:] = traj['airspeed']
+                    if 'energy' in traj.keys() and traj['energy'].shape[0] > 0:
+                        _traj['energy'] = np.zeros(traj['energy'].shape)
+                        _traj['energy'][:] = traj['energy']
+                        cmin = _traj['energy'][:].min()
+                        cmax = _traj['energy'][:].max()
+                        if self.engy_min is None or cmin < self.engy_min:
+                            self.engy_min = cmin
+                        if self.engy_max is None or cmax > self.engy_max:
+                            self.engy_max = cmax
 
-                if 'energy' in traj.keys() and traj['energy'].shape[0] > 0:
-                    _traj['energy'] = np.zeros(traj['energy'].shape)
-                    _traj['energy'][:] = traj['energy']
-                    cmin = _traj['energy'][:].min()
-                    cmax = _traj['energy'][:].max()
-                    if self.engy_min is None or cmin < self.engy_min:
-                        self.engy_min = cmin
-                    if self.engy_max is None or cmax > self.engy_max:
-                        self.engy_max = cmax
+                    _traj['type'] = traj.attrs['type']
+                    li = _traj['last_index'] = traj.attrs['last_index']
+                    _traj['interrupted'] = traj.attrs['interrupted']
+                    _traj['coords'] = traj.attrs['coords']
+                    _traj['label'] = traj.attrs['label']
+                    # Backward compatibility
+                    if 'info' in traj.attrs.keys():
+                        _traj['info'] = traj.attrs['info']
+                    else:
+                        _traj['info'] = ''
 
-                _traj['type'] = traj.attrs['type']
-                li = _traj['last_index'] = traj.attrs['last_index']
-                _traj['interrupted'] = traj.attrs['interrupted']
-                _traj['coords'] = traj.attrs['coords']
-                _traj['label'] = traj.attrs['label']
-                # Backward compatibility
-                if 'info' in traj.attrs.keys():
-                    _traj['info'] = traj.attrs['info']
-                else:
-                    _traj['info'] = ''
+                    # Label trajectories belonging to extremal fields
+                    if _traj['info'].startswith('ef'):
+                        ef_id = int(_traj['info'].strip().split('_')[1])
+                        if ef_id not in self.ef_ids:
+                            self.ef_ids.append(ef_id)
+                            self.ef_trajgroups[ef_id] = []
+                        self.ef_trajgroups[ef_id].append(_traj)
 
-                # Label trajectories belonging to extremal fields
-                if _traj['info'].startswith('ef'):
-                    ef_id = int(_traj['info'].strip().split('_')[1])
-                    if ef_id not in self.ef_ids:
-                        self.ef_ids.append(ef_id)
-                        self.ef_trajgroups[ef_id] = []
-                    self.ef_trajgroups[ef_id].append(_traj)
+                    # Adapt time window to trajectories' timestamps
 
-                # Adapt time window to trajectories' timestamps
-                if not self.tv_wind:
                     tl = np.min(_traj['ts'][:li + 1])
-                    if self.tl is None or tl < self.tl:
-                        self.tl = tl
-                tu = np.max(_traj['ts'])
-                if self.tu is None or tu > self.tu:
-                    self.tu = tu
+                    if self.tl_traj is None or tl < self.tl_traj:
+                        self.tl_traj = tl
+                    tu = np.max(_traj['ts'])
+                    if self.tu_traj is None or tu > self.tu_traj:
+                        self.tu_traj = tu
 
-                self.trajs.append(_traj)
+                    self.trajs.append(_traj)
         # self.engy_min = 0.
         # self.engy_max = 16 * 3.6e6
         self.engy_norm = mpl_colors.Normalize(vmin=self.engy_min, vmax=self.engy_max)
@@ -726,14 +761,8 @@ class Display:
 
             for k in range(nt):
 
-                if not self.tv_wind:
-                    tl = self.rff['ts'][0]
-                    if self.tl is None or tl < self.tl:
-                        self.tl = tl
-
-                tu = self.rff['ts'][-1]
-                if self.tu is None or tu > self.tu:
-                    self.tu = tu
+                self.tl_rff = self.rff['ts'][0]
+                self.tu_rff = self.rff['ts'][-1]
 
                 data_max = self.rff['data'][k, :, :].max()
                 data_min = self.rff['data'][k, :, :].min()
@@ -770,6 +799,29 @@ class Display:
             self.obstacles[:] = f['data']
             self.obs_grid = np.zeros(f['grid'].shape)
             self.obs_grid[:] = f['grid']
+
+    def adapt_tw(self):
+        """
+        Adapt time window to data
+        """
+
+        def mysat(*args, minimize=False):
+            all_none = True
+            values = []
+            for a in args:
+                if a is not None:
+                    all_none = False
+                    values.append(a)
+            if all_none:
+                raise Exception('All values are None for saturation function')
+            return min(values) if minimize else max(values)
+
+        if self.tl_traj is None and self.tl_rff is None:
+            self.tl = self.tl_wind
+            self.tu = self.tu_wind
+        else:
+            self.tl = mysat(self.tl_traj, self.tl_rff, minimize=True)
+            self.tu = mysat(self.tu_traj, self.tu_rff, minimize=False)
 
     def import_params(self, fname=None):
         """
@@ -821,18 +873,33 @@ class Display:
                 self.coords = noted_coords.pop()
 
         missing = set(self.p_names).difference(self.params.keys())
-        # Backward compatibility
-        for a in ['init', 'target']:
-            if f'point_{a}' in self.params.keys():
-                missing.remove(f'x_{a}')
+        try:
+            self.x_init = np.array(self.params['x_init'])
+            missing.remove(f'x_init')
+        except KeyError:
+            # Backward compatibility
+            try:
+                self.x_init = np.array(self.params['point_init'])
+                missing.remove(f'x_init')
+            except KeyError:
+                pass
+        try:
+            self.x_target = np.array(self.params['x_target'])
+            missing.remove(f'x_target')
+        except KeyError:
+            try:
+                self.x_target = np.array(self.params['point_target'])
+                missing.remove(f'x_target')
+            except KeyError:
+                pass
 
         for name in ['airspeed', 'va', 'v_a']:
             if name in self.params.keys():
                 self.airspeed = self.params[name]
 
-        if self.airspeed is not None:
-            self.cm_norm_min = 0.
-            self.cm_norm_max = 2 * self.airspeed
+        # if self.airspeed is not None:
+        #     self.cm_norm_min = 0.
+        #     self.cm_norm_max = 2 * self.airspeed
 
         if len(missing) > 0:
             Display._info(f'Missing parameters : {tuple(missing)}')
@@ -840,6 +907,7 @@ class Display:
     def preprocessing(self):
         # Preprocessing
         # For extremal fields, group points in fronts
+        no_display = False
         no_display = False
         for ef_id in self.ef_ids:
             self.ef_ts = np.linspace(self.tl, self.tu, self.ef_nt)
@@ -867,6 +935,7 @@ class Display:
         self.load_trajs()
         self.load_rff()
         self.load_obs()
+        self.adapt_tw()
         n_trajs = len(self.trajs)
         n_rffs = 0 if self.rff is None else self.rff['data'].shape[0]
         if self.tl is not None and self.tu is not None:
@@ -951,7 +1020,7 @@ class Display:
         X = np.zeros((nx, ny))
         Y = np.zeros((nx, ny))
         if self.rescale_wind:
-            ur = nx // 20
+            ur = max(1, nx // 18)  # nx // 20
         else:
             ur = 1
         factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
@@ -979,7 +1048,12 @@ class Display:
 
         norm = mpl_colors.Normalize()
         self.cm = self.selected_cm
-        norm.autoscale(np.array([self.cm_norm_min, self.cm_norm_max]))
+        if self.coords == 'gcs' and self.wind_norm_max < 1.5 * self.cm_norm_max:
+            self.cm = windy_cm
+            norm.autoscale(np.array([self.cm_norm_min, self.cm_norm_max]))
+        else:
+            self.cm = jet_desat_cm
+            norm.autoscale(np.array([self.wind_norm_min, self.wind_norm_max]))
 
         needs_engy = self.mode_energy and self.mode_ef and self.mode_aggregated
         set_engycb = needs_engy and self.active_windcb
@@ -1060,7 +1134,7 @@ class Display:
         qV = V_grid[::ur, ::ur].flatten()
         qnorms = 1e-6 + np.sqrt(qU ** 2 + qV ** 2)
         kwargs = {
-            'color': (0.4, 0.4, 0.4, 1.0),
+            'color': (0.2, 0.2, 0.2, 1.0),
             # 'width': 1,  # 0.001,
             'pivot': 'tail',
             'alpha': 0.7,
@@ -1168,8 +1242,10 @@ class Display:
             info = ''
 
         annot_label = None
+        linewidth = None
         if info.startswith('ef_'):
             try:
+                linewidth = 1.5
                 annot_label = info.split('_')[2]
             except IndexError:
                 pass
@@ -1207,9 +1283,9 @@ class Display:
                     break
                 else:
                     at_least_one = True
-            if not at_least_one:
-                return
-            if iu <= il:
+            # if not at_least_one:
+            #     return
+            if iu < il:
                 return
 
         # Color selection
@@ -1244,6 +1320,7 @@ class Display:
             'gid': idfr,
             'zorder': ZO_TRAJS,
             'alpha': 0.7,
+            'linewidth': 2.5 if linewidth is None else linewidth,
         }
         px = np.zeros(iu - il + 1)
         px[:] = points[il:iu + 1, 0]
@@ -1311,7 +1388,7 @@ class Display:
         """
 
         # Last points
-        kwargs = {'s': 10. if interrupted else 5.,
+        kwargs = {'s': 10. if interrupted else 7.,
                   'color': color['last'],
                   'marker': (r'x' if interrupted else 'o'),
                   'linewidths': 1.,
@@ -1382,45 +1459,27 @@ class Display:
         else:
             scatterax = self.mainax
 
-        # Fetching parameters
-        target_radius = None
-        try:
-            target_radius = self.params['target_radius']
-        except KeyError:
-            pass
-        x_init = None
-        try:
-            x_init = np.array(self.params['x_init'])
-        except KeyError:
-            # Backward compatibility
-            try:
-                x_init = np.array(self.params['point_init'])
-            except KeyError:
-                pass
-        x_target = None
-        try:
-            x_target = np.array(self.params['x_target'])
-        except KeyError:
-            try:
-                x_target = np.array(self.params['point_target'])
-            except KeyError:
-                pass
-
         # Init point
-        if x_init is not None:
+        if self.x_init is not None:
             factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
-            self.scatter_init = scatterax.scatter(*(factor * x_init), s=30., color='black', marker='o',
-                                                  zorder=ZO_ANNOT, **kwargs)
+            kwargs['s'] = 100 if self.coords == 'gcs' else 70
+            kwargs['color'] = 'black'
+            kwargs['marker'] = 'o'
+            kwargs['zorder'] = ZO_ANNOT
+            self.scatter_init = scatterax.scatter(*(factor * self.x_init), **kwargs)
 
             # if labeling:
             #     self.mainax.annotate('Init', c, (10, 10), textcoords='offset pixels', ha='center')
             # if target_radius is not None:
             #     self.mainax.add_patch(plt.Circle(c, target_radius))
         # Target point
-        if x_target is not None:
+        if self.x_target is not None:
             factor = RAD_TO_DEG if self.coords == 'gcs' else 1.
-            self.scatter_target = scatterax.scatter(*(factor * x_target), s=40., color='black', marker='*',
-                                                    zorder=ZO_ANNOT, **kwargs)
+            kwargs['s'] = 230 if self.coords == 'gcs' else 100
+            kwargs['color'] = 'black'
+            kwargs['marker'] = '*'
+            kwargs['zorder'] = ZO_ANNOT
+            self.scatter_target = scatterax.scatter(*(factor * self.x_target), **kwargs)
 
             # if labeling:
             #     self.mainax.annotate('Target', c, (10, 10), textcoords='offset pixels', ha='center')
@@ -1442,15 +1501,17 @@ class Display:
             ax = self.ax
             kwargs = {'latlon': True}
             factor = RAD_TO_DEG
-        matplotlib.rcParams['hatch.color'] = (0., 0., 0., 0.3)
+        matplotlib.rcParams['hatch.color'] = (.2, .2, .2, 1.)
         self.obs_contours.append(ax.contourf(factor * self.obs_grid[..., 0],
                                              factor * self.obs_grid[..., 1],
                                              ma,
                                              alpha=0.,
-                                             hatches=['O'],
+                                             # colors='grey',
+                                             hatches=['//'],
                                              antialiased=True,
                                              zorder=ZO_OBS,
                                              **kwargs))
+
         if self.coords == 'cartesian':
             self.obs_contours.append(ax.contour(factor * self.obs_grid[..., 0],
                                                 factor * self.obs_grid[..., 1],
@@ -1463,7 +1524,7 @@ class Display:
             self.draw_rff()
         self.draw_obs()
         self.draw_solver()
-        if self.leg is None:
+        if self.leg is None and False:
             self.leg = self.mainax.legend(handles=self.leg_handles, labels=self.leg_labels, loc='center left',
                                           bbox_to_anchor=(1.2, 0.2), handletextpad=0.5, handlelength=0.5,
                                           markerscale=2)
@@ -1494,7 +1555,11 @@ class Display:
         self.output_imgpath = os.path.join(path, basename + f'.{self.img_params["format"]}')
 
     def set_title(self, title):
-        self.title = title
+        if title.startswith('_test_'):
+            pb_id = int(title[6:])
+            self.title = IndexedProblem.problems[pb_id][0]
+        else:
+            self.title = title
 
     def set_coords(self, coords):
         self.coords = coords
@@ -1667,7 +1732,7 @@ class Display:
         if 'u' in flags:
             self.rescale_wind = False
 
-    def to_movie(self, frames=50, fps=10):
+    def to_movie(self, frames=50, fps=10, movie_format='apng', mini=False):
         self._info('Rendering animation')
         anim_path = os.path.join(self.output_dir, 'anim')
         if not os.path.exists(anim_path):
@@ -1679,13 +1744,29 @@ class Display:
             val = i / (frames - 1)
             self.time_slider.set_val(val)
             self.reload_time(val)
-            self.mainfig.savefig(os.path.join(anim_path, f'test_{i:0>4}.png'))
+            kwargs = {}
+            if mini:
+                extent = self.mainax.get_window_extent().transformed(self.mainfig.dpi_scale_trans.inverted())
+                kwargs['bbox_inches'] = extent
+                kwargs['dpi'] = 50
+            self.mainfig.savefig(os.path.join(anim_path, f'{i:0>4}.png'), **kwargs)
 
         pattern_in = os.path.join(anim_path, '*.png')
-        file_out = os.path.join(self.output_dir, 'anim.mp4')
-        command = f"ffmpeg -y -framerate {fps} -pattern_type glob -i '{pattern_in}' '{file_out}'"
-        # -c: v libx264 - pix_fmt yuv420p
-        os.system(command)
+        first_file_in = os.path.join(anim_path, '0000.png')
+        palette = os.path.join(self.output_dir, 'palette.png')
+
+
+        if movie_format == 'gif':
+            os.system(f"ffmpeg -i {first_file_in} -y -vf palettegen {palette}")
+            file_out = os.path.join(self.output_dir, f'anim_s.{movie_format}')
+            command = f"ffmpeg -y -framerate {fps} -pattern_type glob -i '{pattern_in}' -i {palette} -filter_complex 'paletteuse' '{file_out}'"
+            os.system(command)
+            os.remove(palette)
+        else:
+            file_out = os.path.join(self.output_dir, f'anim.{movie_format}')
+            command = f"ffmpeg -y -framerate {fps} -pattern_type glob -i '{pattern_in}' '{file_out}'"
+            # -c: v libx264 - pix_fmt yuv420p
+            os.system(command)
         for filename in os.listdir(anim_path):
             if filename.endswith('.png'):
                 os.remove(os.path.join(anim_path, filename))

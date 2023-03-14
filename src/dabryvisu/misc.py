@@ -1,16 +1,32 @@
 import colorsys
 from math import atan2
-
 import numpy as np
 from matplotlib import pyplot as plt
 
+
+class FontsizeConf:
+
+    def __init__(self):
+        self.fontsize = 18
+        self.axes_titlesize = 24
+        self.axes_labelsize = 22
+        self.xtick_labelsize = 22
+        self.ytick_labelsize = 22
+        self.legend_fontsize = 15
+        self.button_fontsize = 14
+        self.timedisp_major = 20
+        self.timedisp_minor = 14
+        self.font_family = 'lato'
+        self.mathtext_fontset = 'cm'
+
+
 ZO_WIND_NORM = 1
 ZO_WIND_VECTORS = 2
-ZO_TRAJS = 3
-ZO_RFF = 4
-ZO_WIND_ANCHORS = 5
-ZO_ANNOT = 5
-ZO_OBS = 6
+ZO_RFF = 3
+ZO_WIND_ANCHORS = 4
+ZO_OBS = 5
+ZO_TRAJS = 6
+ZO_ANNOT = 7
 
 RAD_TO_DEG = 180. / np.pi
 DEG_TO_RAD = np.pi / 180.
@@ -30,12 +46,13 @@ my_grey3 = np.array([0.5, 0.5, 0.5, 1.0])
 my_green = np.array([0., 0.8, 0., 1.])
 my_green_t = np.diag((1., 1., 1., 0.5)).dot(my_green)
 my_purple = np.array([135 / 255, 23 / 255, 176 / 255, 1.0])
+my_yellow = np.array([237 / 255, 213 / 255, 31 / 255, 1.])
 
 reachability_colors = {
     'pmp': {
         'steps': my_grey3,
         'time-tick': my_orange2,
-        'last': my_red
+        'last': my_black
         # 'steps': my_grey2,
         # 'time-tick': my_orange,
         # 'last': my_red
@@ -56,9 +73,9 @@ reachability_colors = {
         'last': my_orange
     },
     'optimal': {
-        'steps': my_red,
-        'time-tick': my_red,
-        'last': my_red
+        'steps': my_yellow,
+        'time-tick': my_yellow,
+        'last': my_yellow
     },
     'optimal-rft': {
         'steps': my_orange,
@@ -77,7 +94,7 @@ reachability_colors = {
     }
 }
 
-path_colors = ['b', 'g', 'r', 'c', 'm', 'y']
+path_colors = ['r', 'b', '#fce808', 'b', 'g', 'r', 'c', 'm', 'y']
 
 markers = ['o', '1', '2', '3', '4']
 
@@ -168,10 +185,24 @@ CM_WINDY_TRUNCATED = [[0, [98, 113, 183, 255]],
                       [36, [125, 68, 165, 255]],
                       [46, [231, 215, 215, 256]]]
 
+CM_WINDY_TRUNCATED_TRUNC = [[0, [98, 113, 183, 255]],
+                            [1, [57, 97, 159, 255]],
+                            [3, [74, 148, 169, 255]],
+                            [5, [77, 141, 123, 255]],
+                            [7, [83, 165, 83, 255]],
+                            [9, [53, 159, 53, 255]],
+                            [11, [167, 157, 81, 255]],
+                            [13, [159, 127, 58, 255]],
+                            [15, [161, 108, 92, 255]],
+                            [17, [129, 58, 78, 255]],
+                            [19, [175, 80, 136, 255]],
+                            [21, [117, 74, 147, 255]],
+                            [24, [109, 97, 163, 255]]]
+
 # Define windy cm
 import matplotlib.colors as mpl_colors
 
-cm_values = CM_WINDY_TRUNCATED
+cm_values = CM_WINDY_TRUNCATED_TRUNC
 
 
 def lighten(c):
@@ -189,14 +220,14 @@ def middle(x1, x2):
            atan2(np.sin(x1[1]) + np.sin(x2[1]), np.sqrt((np.cos(x1[1]) + bx) ** 2 + by ** 2))
 
 
-def desaturate(c):
+def desaturate(c, sat=0.):
     N, _ = c.shape
     res = np.ones((N, 4))
     for i in range(N):
         rgb = c[i][:3]
         alpha = c[i][3]
         hls = colorsys.rgb_to_hls(*rgb)
-        new_rgb = colorsys.hls_to_rgb(hls[0], hls[1], 0)
+        new_rgb = colorsys.hls_to_rgb(hls[0], hls[1], sat)
         res[i, :] = new_rgb + (alpha,)
     return res
 
@@ -231,3 +262,7 @@ colors[:, 3] = np.ones(colors.shape[0])
 custom_cm = mpl_colors.LinearSegmentedColormap.from_list('custom', colors)
 
 custom_desat_cm = mpl_colors.LinearSegmentedColormap.from_list('custom_desat', desaturate(colors))
+
+jet_cmap = plt.colormaps['jet']
+colors = np.array(list(map(jet_cmap, np.linspace(0.1, 0.9, 128))))
+jet_desat_cm = mpl_colors.LinearSegmentedColormap.from_list('jet_desat', desaturate(colors, sat=0.8))
