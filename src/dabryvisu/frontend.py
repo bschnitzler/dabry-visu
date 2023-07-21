@@ -37,81 +37,48 @@ class FrontendHandler:
         """
         Prompts user case selection depending on context. Sets cache accordingly
         """
-        if self.mode == 'user':
-            self.example_dir = args[0]
-        elif self.mode == 'notebook':
-            from ipywidgets import Dropdown
-            from IPython.core.display import display
-            cache_fp = os.path.join(self.output_dir, '.cache_frontend')
-            default_value = None
-            if os.path.exists(cache_fp):
-                with open(cache_fp, 'r') as f:
-                    default_value = f.readline()
-            option_list = sorted(os.listdir(self.output_dir))
-            new_ol = []
-            for e in option_list:
-                if not e.startswith('example_'):
-                    del e
-                else:
-                    new_ol.append(e.split('example_')[1])
-            kwargs = {'description': "Choose one:",
-                      'options': new_ol}
-            if default_value is not None and os.path.exists(os.path.join(self.output_dir, default_value)):
-                kwargs['value'] = default_value
-            self.dd = Dropdown(**kwargs)
+        class ns:
+            def __init__(self, value):
+                self.__dict__.update(value=value)
 
-            def handler(change):
-                try:
-                    with open(cache_fp, 'w') as f:
-                        f.writelines(change['new'])
-                except KeyError:
-                    pass
-
-            self.dd.observe(handler, names='value')
-            display(self.dd)
+        cache_fp = os.path.join(self.output_dir, '.cache_frontend')
+        last = '{LAST}'
+        latest = '{LATEST}'
+        nlist = [dd for dd in os.listdir(self.output_dir) if
+                 os.path.isdir(os.path.join(self.output_dir, dd)) and not dd.startswith('.')]
+        if select_latest:
+            name = latest
+        elif select_last:
+            name = last
         else:
-            class ns:
-                def __init__(self, value):
-                    self.__dict__.update(value=value)
+            name = easygui.choicebox('Choose example', 'Example1', [latest, last] + list(sorted(nlist)))
+        if name is None:
+            print('No example selected, quitting', file=sys.stderr)
+            exit(1)
+        sel_dir = os.path.join(self.output_dir, name)
+        if name == latest:
+            print('Opening latest file')
+            all_subdirs = list(map(lambda n: os.path.join(self.output_dir, n), nlist))
+            all_params = []
+            for dd in all_subdirs:
+                params_path = os.path.join(dd, 'params.json')
+                if os.path.exists(params_path):
+                    all_params.append(params_path)
 
-            cache_fp = os.path.join(self.output_dir, '.cache_frontend')
-            last = '{LAST}'
-            latest = '{LATEST}'
-            nlist = [dd for dd in os.listdir(self.output_dir) if
-                     os.path.isdir(os.path.join(self.output_dir, dd)) and not dd.startswith('.')]
-            if select_latest:
-                name = latest
-            elif select_last:
-                name = last
-            else:
-                name = easygui.choicebox('Choose example', 'Example1', [latest, last] + list(sorted(nlist)))
-            if name is None:
-                print('No example selected, quitting', file=sys.stderr)
-                exit(1)
-            sel_dir = os.path.join(self.output_dir, name)
-            if name == latest:
-                print('Opening latest file')
-                all_subdirs = list(map(lambda n: os.path.join(self.output_dir, n), nlist))
-                all_params = []
-                for dd in all_subdirs:
-                    params_path = os.path.join(dd, 'params.json')
-                    if os.path.exists(params_path):
-                        all_params.append(params_path)
-
-                latest_subdir = os.path.dirname(max(all_params, key=os.path.getmtime))
-                print(latest_subdir)
-                self.dd = ns(os.path.basename(latest_subdir))
-            elif name == last:
-                print('Opening last file')
-                with open(cache_fp, 'r') as f:
-                    sel_dir = f.readline()
-                    print(sel_dir)
-                self.dd = ns(os.path.basename(sel_dir))
-            else:
-                # self.dd = ns(os.path.basename(sel_dir).split('example_')[1])
-                self.dd = ns(os.path.basename(sel_dir))
-                with open(cache_fp, 'w') as f:
-                    f.writelines(sel_dir)
+            latest_subdir = os.path.dirname(max(all_params, key=os.path.getmtime))
+            print(latest_subdir)
+            self.dd = ns(os.path.basename(latest_subdir))
+        elif name == last:
+            print('Opening last file')
+            with open(cache_fp, 'r') as f:
+                sel_dir = f.readline()
+                print(sel_dir)
+            self.dd = ns(os.path.basename(sel_dir))
+        else:
+            # self.dd = ns(os.path.basename(sel_dir).split('example_')[1])
+            self.dd = ns(os.path.basename(sel_dir))
+            with open(cache_fp, 'w') as f:
+                f.writelines(sel_dir)
 
     def run_frontend(self, noparams=True, noshow=False, block=False, movie=False, frames=None, fps=None,
                      movie_format='apng', mini= False, flags=''):

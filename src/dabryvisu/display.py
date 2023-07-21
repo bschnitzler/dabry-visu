@@ -1,31 +1,27 @@
-import colorsys
 import json
 import os
 import sys
+import time
 import warnings
 import webbrowser
 from datetime import datetime
+from math import floor
 
+import h5py
 import matplotlib
 import matplotlib.cm as mpl_cm
-import matplotlib.colors as mpl_colors
-import matplotlib.pyplot as plt
-import tqdm
-
-from matplotlib.widgets import Button, CheckButtons, Slider
-from mpl_toolkits.basemap import Basemap
-import h5py
 import scipy.ndimage
-from math import floor, cos, sin
-import time
-
+import tqdm
+from dabry.geodata import GeoData
+from dabry.problem import IndexedProblem
+from matplotlib.widgets import Slider
+from mpl_toolkits.basemap import Basemap
 from pyproj import Proj
 from scipy.interpolate import griddata
 
-from .misc import *
+import plotly.express
 
-from dabry.geodata import GeoData
-from dabry.problem import IndexedProblem
+from dabryvisu.misc import *
 
 state_names = [r"$x\:[m]$", r"$y\:[m]$"]
 control_names = [r"$u\:[rad]$"]
@@ -36,12 +32,11 @@ class Display:
     Defines all the visualization functions for navigation problems
     """
 
-    def __init__(self, coords='cartesian', mode='only-map', title='Title', projection='merc'):
+    def __init__(self, coords='cartesian', title='Title', projection='merc'):
         """
         :param coords: Either 'cartesian' for planar problems or 'gcs' for Earth-based problems
         """
         self.coords = coords
-        self.mode = mode
 
         self.x_min = None
         self.x_max = None
@@ -108,10 +103,16 @@ class Display:
         self.trajs_fname = 'trajectories.h5'
         self.rff_fname = 'rff.h5'
         self.obs_fname = 'obs.h5'
+        self.pen_fname = 'penalty.h5'
+        self.filter_fname = '.trajfilter'
         self.wind_fpath = None
         self.trajs_fpath = None
         self.rff_fpath = None
         self.obs_fpath = None
+        self.pen_fpath = None
+        self.filter_fpath = None
+
+        self.traj_filter = []
         # 0 for no aggregation (fronts), 1 for aggregation and time cursor, 2 for aggrgation and no time cursor
         self.mode_aggregated = 0
         self.mode_controls = False
@@ -156,6 +157,8 @@ class Display:
         self.obstacles = None
         self.obs_grid = None
 
+        self.penalty = None
+
         self.tv_wind = False
 
         self.traj_artists = []
@@ -169,6 +172,7 @@ class Display:
 
         self.rff_contours = []
         self.obs_contours = []
+        self.pen_contours = []
 
         self.label_list = []
         self.scatter_init = None
@@ -234,12 +238,18 @@ class Display:
         self.x_init = None
         self.x_target = None
 
+        matplotlib.rcParams['pdf.fonttype'] = 42
+        matplotlib.rcParams['ps.fonttype'] = 42
+        # matplotlib.rcParams['text.usetex'] = True
+
+        self.mode_3d = True
+
         self.geodata = GeoData()
 
     def _index(self, mode):
         """
         Get nearest lowest index for time discrete grid
-        :param mode: Either 'wind' or 'rff'
+        :param mode: 'wind', 'rff' or 'pen'
         :return: Nearest lowest index for time, coefficient for the linear interpolation
         """
         ts = None
@@ -247,6 +257,8 @@ class Display:
             ts = self.wind['ts']
         elif mode == 'rff':
             ts = self.rff['ts']
+        elif mode == 'pen':
+            ts = self.penalty['ts']
         else:
             Display._error(f'Unknown mode "{mode}" for _index')
         nt = ts.shape[0]
@@ -300,7 +312,7 @@ class Display:
         plt.rc('xtick', labelsize=self.fsc.xtick_labelsize)
         plt.rc('ytick', labelsize=self.fsc.ytick_labelsize)
         plt.rc('legend', fontsize=self.fsc.legend_fontsize)
-        #plt.rc('font', family=self.fsc.font_family)
+        # plt.rc('font', family=self.fsc.font_family)
         plt.rc('mathtext', fontset=self.fsc.mathtext_fontset)
 
         self.mainfig = plt.figure(num=f"dabryvisu ({self.coords})",
@@ -316,35 +328,12 @@ class Display:
             wspace=0.13
         )
         self.mainfig.suptitle(self.title)
-        self.mainax = self.mainfig.add_subplot(box_aspect=1., anchor='C')
-        if self.mode == "only-map":
-            # gs = GridSpec(1, 1, figure=self.mainfig)
-            # self.map = self.mainfig.add_subplot(gs[0, 0])
-            pass
-        elif self.mode == "full":
-            """
-            In this mode, display a second figure with state and control evolution over time
-            """
-            print(f'Mode "{self.mode}" unsupported yet')
-            exit(1)
-            # gs = GridSpec(self.dim_state + self.dim_control, 2, figure=self.mainfig, wspace=.25)
-            # self.map = self.mainfig.add_subplot(gs[:, 0])
-            # for k in range(self.dim_state):
-            #     self.state.append(self.mainfig.add_subplot(gs[k, 1]))
-            # for k in range(self.dim_control):
-            #     self.control.append(self.mainfig.add_subplot(gs[k + self.dim_state, 1]))
-        elif self.mode == "full-adjoint":
-            """
-            In this mode, display a third figure with adjoint state evolution over time
-            """
-            print(f'Mode "{self.mode}" unsupported yet')
-            exit(1)
-            # gs = GridSpec(1, 2, figure=self.mainfig, wspace=.25)
-            # self.map = self.mainfig.add_subplot(gs[0, 0])
-            # self.map_adjoint = self.mainfig.add_subplot(gs[0, 1])  # , projection="polar")
+        if self.mode_3d:
+            self.mainax = self.mainfig.add_subplot(projection='3d')
+        else:
+            self.mainax = self.mainfig.add_subplot(box_aspect=1., anchor='C')
+
         self.setup_map()
-        if self.mode == "full-adjoint":
-            self.setup_map_adj()
         # self.setup_components()
         self.display_setup = True
 
@@ -398,9 +387,18 @@ class Display:
         cartesian = (self.coords == 'cartesian')
         gcs = (self.coords == 'gcs')
 
+        if self.mode_3d:
+            self.ax = self.mainax
+            self.ax.set_xlim(self.x_min - self.x_offset * (self.x_max - self.x_min),
+                                 self.x_max + self.x_offset * (self.x_max - self.x_min))
+            self.ax.set_ylim(self.y_min - self.y_offset * (self.y_max - self.y_min),
+                                 self.y_max + self.y_offset * (self.y_max - self.y_min))
+            self.ax.set_zlim(0, self.engy_max)
+            return
+
         if gcs:
             kwargs = {
-                'resolution': 'l',
+                'resolution': 'c',
                 'projection': self.projection,
                 'ax': self.mainax
             }
@@ -474,22 +472,20 @@ class Display:
                 lat_min = RAD_TO_DEG * min(self.y_min, self.y_max)
                 lat_max = RAD_TO_DEG * max(self.y_min, self.y_max)
                 n_lat = floor((lat_max - lat_min) / 10) + 2
-                self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)), labels=[1, 0, 0, 0],
+                self.map.drawparallels(10. * (floor(lat_min / 10.) + np.arange(n_lat)),  # labels=[1, 0, 0, 0],
                                        linewidth=lw,
                                        dashes=dashes, textcolor=(1., 1., 1., 0.))
                 # draw meridians
                 lon_min = RAD_TO_DEG * min(self.x_min, self.x_max)
                 lon_max = RAD_TO_DEG * max(self.x_min, self.x_max)
                 n_lon = floor((lon_max - lon_min) / 10) + 2
-                self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)), labels=[1, 0, 0, 1],
+                self.map.drawmeridians(10. * (floor(lon_min / 10.) + np.arange(n_lon)),  # labels=[1, 0, 0, 1],
                                        linewidth=lw,
                                        dashes=dashes)
             except ValueError:
                 pass
 
         if cartesian:
-            # self.mainax.axhline(y=0, color='k', linewidth=0.5)
-            # self.mainax.axvline(x=0, color='k', linewidth=0.5)
             if self.axes_equal:
                 self.mainax.axis('equal')
             self.mainax.set_xlim(self.x_min - self.x_offset * (self.x_max - self.x_min),
@@ -509,21 +505,6 @@ class Display:
             self.ax = self.mainax
         if gcs:
             self.ax = self.map
-
-    def setup_map_adj(self):
-        """
-        Sets the display of the map for the adjoint state
-        """
-        self.map_adjoint.set_xlim(-1.1, 1.1)
-        self.map_adjoint.set_ylim(-1.1, 1.1)
-
-        self.map_adjoint.set_xlabel(r'$p_x\;[s/m]$')
-        self.map_adjoint.set_ylabel(r'$p_y\;[s/m]$')
-
-        self.map_adjoint.grid(visible=True, linestyle='-.', linewidth=0.5)
-        self.map_adjoint.tick_params(direction='in')
-        if self.axes_equal:
-            self.map_adjoint.axis('equal')
 
     def set_wind_bounds(self):
         self.x_min = np.min(self.wind['grid'][:, :, 0])
@@ -617,17 +598,30 @@ class Display:
                     coll.remove()
             self.obs_contours = []
 
+    def clear_pen(self):
+        if len(self.pen_contours) != 0:
+            for c in self.pen_contours:
+                for coll in c.collections:
+                    coll.remove()
+            self.pen_contours = []
+
     def clear_solver(self):
         if self.scatter_init is not None:
             self.scatter_init.remove()
         if self.scatter_target is not None:
             self.scatter_target.remove()
 
+    def load_filter(self):
+        self.filter_fpath = os.path.join(self.output_dir, self.filter_fname)
+        if not os.path.exists(self.filter_fpath):
+            return
+        with open(self.filter_fpath, 'r') as f:
+            self.traj_filter = list(map(str.strip, f.readlines()))
+
     def load_wind(self, filename=None):
         self.wind = None
         if self.wind_fpath is None:
             filename = self.wind_fname if filename is None else filename
-            self.wind_fpath = os.path.join(self.output_dir, filename)
             self.wind_fpath = os.path.join(self.output_dir, filename)
         with h5py.File(self.wind_fpath, 'r') as f:
             self.wind = {}
@@ -659,6 +653,8 @@ class Display:
         for traj_fpath in self.trajs_fpath:
             with h5py.File(traj_fpath, 'r') as f:
                 for k, traj in enumerate(f.values()):
+                    if 'info' in traj.attrs.keys() and traj.attrs['info'] in self.traj_filter:
+                        continue
                     if traj['ts'].shape[0] <= 1:
                         continue
                     if traj.attrs['coords'] != self.coords:
@@ -800,6 +796,39 @@ class Display:
             self.obs_grid = np.zeros(f['grid'].shape)
             self.obs_grid[:] = f['grid']
 
+    def load_pen(self, filename=None):
+        if self.pen_fpath is None:
+            filename = self.pen_fname if filename is None else filename
+            self.pen_fpath = os.path.join(self.output_dir, filename)
+        if not os.path.exists(self.pen_fpath):
+            return
+        with h5py.File(self.pen_fpath, 'r') as f:
+            self.penalty = {}
+            self.penalty['data'] = np.zeros(f['data'].shape)
+            self.penalty['data'][:] = f['data']
+            self.penalty['grid'] = np.zeros(f['grid'].shape)
+            self.penalty['grid'][:] = f['grid']
+            self.penalty['ts'] = np.zeros(f['ts'].shape)
+            self.penalty['ts'][:] = f['ts']
+
+    def load_all(self):
+        self.load_filter()
+        self.load_wind()
+        self.load_trajs()
+        self.load_rff()
+        self.load_obs()
+        self.load_pen()
+        self.adapt_tw()
+        n_trajs = len(self.trajs)
+        n_rffs = 0 if self.rff is None else self.rff['data'].shape[0]
+        if self.tl is not None and self.tu is not None:
+            self.tcur = 0.5 * (self.tl + self.tu)
+        self.preprocessing()
+        n_ef = len(self.ef_trajgroups.keys())
+        n_eft = sum((len(tgv) for tgv in self.ef_trajgroups.values()))
+        Display._info(
+            f'Loading completed. {n_trajs - n_eft} regular trajs, {n_ef} extremal fields of {n_eft} trajs, {n_rffs} RFFs.')
+
     def adapt_tw(self):
         """
         Adapt time window to data
@@ -908,7 +937,6 @@ class Display:
         # Preprocessing
         # For extremal fields, group points in fronts
         no_display = False
-        no_display = False
         for ef_id in self.ef_ids:
             self.ef_ts = np.linspace(self.tl, self.tu, self.ef_nt)
             front = [[] for _ in range(self.ef_nt)]
@@ -917,10 +945,12 @@ class Display:
                 floor((self.ef_nt - 1) * (t - self.tl) / (self.tu - self.tl))
 
             for traj in self.ef_trajgroups[ef_id]:
+                nt = len(traj['ts'])
                 for k, t in enumerate(traj['ts']):
                     i = self.ef_index(t)
                     if i is not None:
-                        front[i].append(traj['data'][k])
+                        ke = k if k < nt - 1 else k-1
+                        front[i].append(np.array(tuple(traj['data'][k]) + (traj['energy'][ke],)))
             for i in range(len(front)):
                 front[i] = np.array(front[i])
             self.ef_fronts[ef_id] = front
@@ -929,22 +959,6 @@ class Display:
                 no_display = True
             else:
                 self.ef_agg_display[ef_id] = False
-
-    def load_all(self):
-        self.load_wind()
-        self.load_trajs()
-        self.load_rff()
-        self.load_obs()
-        self.adapt_tw()
-        n_trajs = len(self.trajs)
-        n_rffs = 0 if self.rff is None else self.rff['data'].shape[0]
-        if self.tl is not None and self.tu is not None:
-            self.tcur = 0.5 * (self.tl + self.tu)
-        self.preprocessing()
-        n_ef = len(self.ef_trajgroups.keys())
-        n_eft = sum((len(tgv) for tgv in self.ef_trajgroups.values()))
-        Display._info(
-            f'Loading completed. {n_trajs - n_eft} regular trajs, {n_ef} extremal fields of {n_eft} trajs, {n_rffs} RFFs.')
 
     def draw_rff(self, debug=False, interp=True):
         self.clear_rff()
@@ -1102,11 +1116,15 @@ class Display:
             kwargs['latlon'] = True
 
         if not self.mode_wind:
-            kwargs['shading'] = 'auto'
-            kwargs['antialiased'] = True
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
+            if self.mode_3d:
+                colors = self.cm(norm(znorms3d))
+                self.wind_colormesh = self.ax.plot_surface(zX, zY, np.zeros(zX.shape), facecolors=colors, zorder=ZO_WIND_NORM)#, **kwargs)
+            else:
+                kwargs['shading'] = 'auto'
+                kwargs['antialiased'] = True
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    self.wind_colormesh = self.ax.pcolormesh(zX, zY, znorms3d, **kwargs)
         else:
             znorms3d = scipy.ndimage.zoom(norms3d, 3)
             zX = scipy.ndimage.zoom(X, 3)
@@ -1145,7 +1163,16 @@ class Display:
         if self.coords == 'gcs':
             kwargs['latlon'] = True
         if np.any(qnorms > self.cm_norm_min + 0.01 * (self.cm_norm_max - self.cm_norm_min)):
-            self.wind_quiver = self.ax.quiver(qX, qY, qU, qV, **kwargs)  # color=color)
+            if not self.mode_3d:
+                self.wind_quiver = self.ax.quiver(qX, qY, qU, qV, **kwargs)  # color=color)
+            else:
+                U, V = U_grid[::ur, ::ur], V_grid[::ur, ::ur]
+                qZ = np.zeros(qX.shape)
+                W = np.zeros(U.shape)
+                del kwargs['units']
+                del kwargs['minshaft']
+                self.wind_quiver = self.ax.quiver(qX, qY, qZ, U, V, W, **kwargs)  # color=color)
+
 
     # def setup_components(self):
     #     for k, state_plot in enumerate(self.state):
@@ -1212,7 +1239,11 @@ class Display:
                             kwargs['latlon'] = True
                             px = RAD_TO_DEG * px
                             py = RAD_TO_DEG * py
-                        scatter = self.ax.scatter(px, py, **kwargs)
+                        if self.mode_3d:
+                            pz = points[:, 2]
+                            scatter = self.ax.scatter(px, py, pz)
+                        else:
+                            scatter = self.ax.scatter(px, py, **kwargs)
                         self.traj_lp.append(scatter)
         else:
             for ef_id in self.ef_fronts.keys():
@@ -1406,7 +1437,10 @@ class Display:
 
         # Annotation
         if self.mode_annot:
-            self.traj_annot.append(self.ax.annotate(str(annot_label), xy=(px, py), fontsize='x-small'))
+            if self.coords == 'cartesian':
+                self.traj_annot.append(self.ax.annotate(str(annot_label), xy=(px, py), fontsize='x-small'))
+            else:
+                self.traj_annot.append(self.mainax.annotate(str(annot_label), xy=(px, py), fontsize='x-small'))
 
         # Heading vectors
         factor = 1. if self.coords == 'cartesian' else EARTH_RADIUS
@@ -1434,20 +1468,6 @@ class Display:
             self.traj_controls.append(self.ax.quiver(px, py, cvec[0], cvec[1], **kwargs))
 
         return scatter
-
-        # if self.mode == "full":
-        #     for k in range(points.shape[1]):
-        #         self.state[k].plot(ts[:last_index], points[:last_index, k])
-        #     k = 0
-        #     self.control[k].plot(ts[:last_index], traj.controls[:last_index])
-        # elif self.mode == "full-adjoint":
-        #     if isinstance(traj, AugmentedTraj):
-        #         self.map_adjoint.scatter(traj.adjoints[:last_index, 0], traj.adjoints[:last_index, 1],
-        #                                  s=s,
-        #                                  c=colors,
-        #                                  cmap=cmap,
-        #                                  label=label,
-        #                                  marker=None)
 
     def draw_solver(self, labeling=True):
         self.clear_solver()
@@ -1517,18 +1537,51 @@ class Display:
                                                 factor * self.obs_grid[..., 1],
                                                 self.obstacles, [-0.5]))
 
+    def draw_pen(self):
+        self.clear_pen()
+        if self.penalty is None:
+            return
+        if self.coords == 'cartesian':
+            ax = self.mainax
+            kwargs = {}
+            factor = 1.
+        else:
+            ax = self.ax
+            kwargs = {'latlon': True}
+            factor = RAD_TO_DEG
+        matplotlib.rcParams['hatch.color'] = (.2, .2, .2, 1.)
+        i, a = self._index('pen')
+        data = (1 - a) * self.penalty['data'][i] + a * self.penalty['data'][i+1]
+        self.pen_contours.append(ax.contourf(factor * self.penalty['grid'][..., 0],
+                                             factor * self.penalty['grid'][..., 1],
+                                             data,
+                                             alpha=0.5,
+                                             antialiased=True,
+                                             zorder=ZO_OBS,
+                                             **kwargs))
+
+        if self.coords == 'cartesian':
+            self.pen_contours.append(ax.contour(factor * self.penalty['grid'][..., 0],
+                                                factor * self.penalty['grid'][..., 1],
+                                                data, [-0.5]))
+
     def draw_all(self):
-        self.draw_wind()
-        self.draw_trajs()
-        if self.has_display_rff:
-            self.draw_rff()
-        self.draw_obs()
-        self.draw_solver()
-        if self.leg is None and False:
-            self.leg = self.mainax.legend(handles=self.leg_handles, labels=self.leg_labels, loc='center left',
-                                          bbox_to_anchor=(1.2, 0.2), handletextpad=0.5, handlelength=0.5,
-                                          markerscale=2)
-        self.mainfig.canvas.draw()
+        if self.mode_3d:
+            self.draw_wind()
+            self.draw_trajs()
+        else:
+            self.draw_wind()
+            self.draw_trajs()
+            if self.has_display_rff:
+                self.draw_rff()
+            self.draw_obs()
+            self.draw_pen()
+            self.draw_solver()
+            if self.leg is None:
+                self.leg = self.mainax.legend(handles=self.leg_handles, labels=self.leg_labels, loc='center left',
+                                              bbox_to_anchor=(1.2, 0.2), handletextpad=0.5, handlelength=0.5,
+                                              markerscale=2)
+            self.mainfig.canvas.draw()
 
     def draw_calibration(self):
         if self.coords == 'gcs':
@@ -1731,6 +1784,8 @@ class Display:
             self.mode_ef = False
         if 'u' in flags:
             self.rescale_wind = False
+        if 'e' not in flags:
+            self.mode_energy = False
 
     def to_movie(self, frames=50, fps=10, movie_format='apng', mini=False):
         self._info('Rendering animation')
@@ -1754,7 +1809,6 @@ class Display:
         pattern_in = os.path.join(anim_path, '*.png')
         first_file_in = os.path.join(anim_path, '0000.png')
         palette = os.path.join(self.output_dir, 'palette.png')
-
 
         if movie_format == 'gif':
             os.system(f"ffmpeg -i {first_file_in} -y -vf palettegen {palette}")
